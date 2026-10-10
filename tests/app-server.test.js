@@ -125,7 +125,22 @@ test("the active-writer refusal surfaces verbatim, and is not a crash", async (t
   );
   // queueing still works while the lock is held: that is the whole point.
   const queued = await client.call("thread/queue/add", { threadId: "T1", input: [] });
-  assert.equal(queued.queuedSubmission.queueOrder, 1);
+  // The reply on the wire carries no queue-order field (docs/protocol.md), so the
+  // fake must not invent one either — this assertion used to lock in the fiction.
+  assert.equal(queued.queuedSubmission.queueOrder, undefined);
+  assert.equal(typeof queued.queuedSubmission.id, "string");
+
+  // And the entry it wrote is readable, then cancellable.
+  const listed = await client.call("thread/queue/list", { threadId: "T1" });
+  assert.equal(listed.data.length, 1);
+  assert.equal(listed.data[0].id, queued.queuedSubmission.id);
+  const deleted = await client.call("thread/queue/delete", {
+    threadId: "T1",
+    queuedSubmissionId: listed.data[0].id,
+  });
+  assert.equal(deleted.deleted, true);
+  const after = await client.call("thread/queue/list", { threadId: "T1" });
+  assert.deepEqual(after.data, []);
 });
 
 test("a request that is never answered rejects on its own timeout", async (t) => {

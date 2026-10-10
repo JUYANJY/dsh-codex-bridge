@@ -12,6 +12,9 @@
  */
 import { defineTool } from "@deepseek-ai/dsh-tools";
 
+/** The actions this tool accepts. Anything else is a caller error, not a decline. */
+const ACTIONS = ["list", "accept", "decline"];
+
 /**
  * Build the approvals tool.
  * @param bridge - the shared bridge.
@@ -28,7 +31,7 @@ export function approvalsTool(bridge) {
       + "queue; action=accept or action=decline answers one request (or every request when requestId is "
       + "omitted).",
     parameters: {
-      action: { type: "string", description: "list (default) | accept | decline." },
+      action: { type: "string", description: "list (default) | accept | decline. Any other value is rejected." },
       requestId: { type: "string", description: "Specific inbound request id to answer." },
       reason: { type: "string", description: "Reason recorded when declining." },
     },
@@ -67,6 +70,12 @@ export function approvalsTool(bridge) {
     },
     async execute(args) {
       const action = args.action ?? "list";
+      // Reject an unrecognised action here, before the connection is touched. The
+      // earlier code folded every other value into `decline`, so a typo performed
+      // a real, irreversible write instead of failing.
+      if (!ACTIONS.includes(action)) {
+        throw new Error(`unknown action ${JSON.stringify(action)}: expected one of ${ACTIONS.join(", ")}`);
+      }
       return bridge.withClient(async (client) => {
         const describe = (request) => {
           const params = request.params ?? {};

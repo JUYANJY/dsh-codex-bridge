@@ -50,6 +50,14 @@ const ITEMS = [
   { turnId: "turn-1", item: { type: "agentMessage", id: "i5", content: [{ type: "text", text: "done" }] } },
 ];
 
+/**
+ * The app-server's submission queue. `thread/queue/list` and `thread/queue/delete`
+ * only mean something against a store that remembers what was added, so this is a
+ * real (if small) queue rather than a fixed reply.
+ */
+const QUEUE = [];
+let queueSeq = 0;
+
 /** @param value - any JSON-frame payload. */
 function send(value) {
   process.stdout.write(`${JSON.stringify(value)}\n`);
@@ -127,14 +135,43 @@ function handle(message) {
           rateLimitResetCredits: { availableCount: 2 },
         });
         return;
-      case "thread/queue/add":
+      case "thread/queue/add": {
+        const entry = {
+          id: `q-${++queueSeq}`,
+          threadId: params.threadId,
+          input: params.input ?? [],
+          clientUserMessageId: params.clientUserMessageId ?? null,
+        };
+        QUEUE.push(entry);
+        // Faithful to the live wire: the reply has no queue-order field.
         reply(message.id, {
-          queuedSubmission: { id: "q-1", threadId: params.threadId, queueOrder: 1 },
+          queuedSubmission: {
+            id: entry.id,
+            input: entry.input,
+            clientUserMessageId: entry.clientUserMessageId,
+          },
         });
         return;
+      }
       case "thread/queue/list":
-        reply(message.id, { data: [], nextCursor: null });
+        reply(message.id, {
+          data: QUEUE
+            .filter((entry) => entry.threadId === params.threadId)
+            .map(({ threadId, ...entry }) => entry),
+          nextCursor: null,
+        });
         return;
+      case "thread/queue/delete": {
+        const index = QUEUE.findIndex((entry) =>
+          entry.id === params.queuedSubmissionId && entry.threadId === params.threadId);
+        if (index < 0) {
+          reply(message.id, { deleted: false });
+          return;
+        }
+        QUEUE.splice(index, 1);
+        reply(message.id, { deleted: true });
+        return;
+      }
       case "thread/resume":
         if (LOCKED) fail(message.id, ACTIVE_WRITER(params.threadId));
         else reply(message.id, { thread: { id: params.threadId } });

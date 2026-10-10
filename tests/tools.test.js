@@ -235,6 +235,78 @@ test("codex_send mode=steer requires a turnId", async () => {
   );
 });
 
+test("codex_queue lists what is waiting, resolving the thread when none is given", async () => {
+  // Shape copied from a live app-server reply (docs/protocol.md).
+  const client = stubClient({
+    "thread/list": { data: THREADS },
+    "thread/queue/list": {
+      data: [{
+        id: "01a12470-c8b0-7992-b011-dc8fabef74f2",
+        input: [{ type: "text", text: "please also update the docs", text_elements: [] }],
+        clientUserMessageId: "probe-1791612733616",
+      }],
+      nextCursor: null,
+    },
+  });
+  const value = await toolFor("codex_queue", client).execute({});
+  assert.equal(value.action, "list");
+  assert.equal(value.threadId, "T1");
+  assert.equal(value.deleted, false);
+  assert.equal(value.entries.length, 1);
+  assert.equal(value.entries[0].id, "01a12470-c8b0-7992-b011-dc8fabef74f2");
+  assert.equal(value.entries[0].text, "please also update the docs");
+  assert.equal(value.entries[0].clientUserMessageId, "probe-1791612733616");
+  assert.equal(value.note, "");
+});
+
+test("codex_queue says so when nothing is waiting", async () => {
+  const client = stubClient({ "thread/queue/list": { data: [], nextCursor: null } });
+  const value = await toolFor("codex_queue", client).execute({ threadId: "T1" });
+  assert.deepEqual(value.entries, []);
+  assert.equal(value.note, "nothing queued");
+});
+
+test("codex_queue refuses a delete that does not name its target", async () => {
+  const client = stubClient({ "thread/queue/delete": { deleted: true } });
+  const tool = toolFor("codex_queue", client);
+  await assert.rejects(
+    () => tool.execute({ action: "delete", queuedSubmissionId: "q-1" }),
+    /action=delete requires threadId/,
+  );
+  await assert.rejects(
+    () => tool.execute({ action: "delete", threadId: "T1" }),
+    /action=delete requires queuedSubmissionId/,
+  );
+  // Neither attempt may reach the wire: a destructive call does not get to guess.
+  assert.deepEqual(client.calls, []);
+});
+
+test("codex_queue delete reports what the server confirmed rather than assuming it", async () => {
+  const confirmed = stubClient({ "thread/queue/delete": { deleted: true } });
+  const first = await toolFor("codex_queue", confirmed).execute({
+    action: "delete", threadId: "T1", queuedSubmissionId: "q-1",
+  });
+  assert.equal(first.deleted, true);
+  assert.deepEqual(confirmed.calls[0], ["thread/queue/delete", { threadId: "T1", queuedSubmissionId: "q-1" }]);
+  assert.match(first.note, /cancelled q-1/);
+
+  // The common real outcome: the session already consumed it.
+  const missed = stubClient({ "thread/queue/delete": { deleted: false } });
+  const second = await toolFor("codex_queue", missed).execute({
+    action: "delete", threadId: "T1", queuedSubmissionId: "q-gone",
+  });
+  assert.equal(second.deleted, false);
+  assert.match(second.note, /did not confirm deleting q-gone/);
+});
+
+test("codex_queue rejects an unknown action", async () => {
+  const client = stubClient({ "thread/queue/list": { data: [], nextCursor: null } });
+  await assert.rejects(
+    () => toolFor("codex_queue", client).execute({ action: "clear", threadId: "T1" }),
+    /unknown action "clear": expected one of list, delete/,
+  );
+});
+
 test("codex_approvals lists the queue", async () => {
   const client = stubClient({});
   client.pending = [{
@@ -279,13 +351,26 @@ test("codex_approvals answers a currentTime/read with a clock, not a decision", 
   assert.equal(typeof client.responded[0].payload.result.unixMs, "number");
 });
 
+test("codex_approvals rejects an unknown action instead of declining", async () => {
+  const client = stubClient({});
+  client.pending = [{ id: 1, method: "execCommandApproval", params: {}, receivedAt: Date.now() }];
+  await assert.rejects(
+    () => toolFor("codex_approvals", client).execute({ action: "aproval", requestId: "1" }),
+    /unknown action "aproval": expected one of list, accept, decline/,
+  );
+  // The code this replaced folded every other string into `decline`, i.e. a typo
+  // answered a real approval request with a refusal.
+  assert.deepEqual(client.responded, []);
+});
+
 test("every tool renders its own output without throwing", async () => {
   const client = stubClient({
     "account/read": { account: { type: "chatgpt", email: "e", planType: "plus" } },
     "account/rateLimits/read": { rateLimits: { primary: {}, secondary: {} } },
     "thread/list": { data: THREADS },
     "thread/items/list": ITEMS,
-    "thread/queue/add": { queuedSubmission: { id: "q", queueOrder: 1 } },
+    "thread/queue/add": { queuedSubmission: { id: "q" } },
+    "thread/queue/list": { data: [], nextCursor: null },
   });
   for (const tool of allTools(stubBridge(client), {})) {
     const args = tool.name === "codex_send"

@@ -3,6 +3,7 @@
  * @module dsh-codex-bridge/tools
  */
 import { approvalsTool } from "./approvals.js";
+import { queueTool } from "./queue.js";
 import { sendTool } from "./send.js";
 import { statusTool } from "./status.js";
 import { threadsTool } from "./threads.js";
@@ -17,6 +18,7 @@ export const TOOL_NAMES = [
   "codex_watch",
   "codex_send",
   "codex_approvals",
+  "codex_queue",
 ];
 
 /**
@@ -33,5 +35,6 @@ export function allTools(bridge, options = {}) {
     watchTool(bridge),
     sendTool(bridge, options),
     approvalsTool(bridge),
+    queueTool(bridge, options),
   ];
 }

@@ -68,6 +68,21 @@ check(
 const threads = await listThreads(client, { limit: 5 });
 check(Array.isArray(threads), "thread/list answered", `${threads.length} recent thread(s)`);
 
+// `codex_queue action=list` is only a projection of thread/queue/list, so the
+// method has to answer on this build. Read-only, and safe on a live thread.
+const probe = threads[0]?.id;
+if (probe) {
+  const queue = await client.call("thread/queue/list", { threadId: probe });
+  const entries = queue?.data ?? [];
+  check(Array.isArray(queue?.data), "thread/queue/list answered", `${entries.length} waiting`);
+  check(
+    entries.every((entry) => typeof entry?.id === "string"),
+    "every queue entry carries an id",
+  );
+} else {
+  check(true, "thread/queue/list", "skipped — no recent thread to probe");
+}
+
 // The bridge is what the tools actually hold; make sure it can hand one out.
 const bridge = new CodexBridge({ binary: bin, requestTimeoutMs: 5000 });
 const viaBridge = await bridge.withClient((live) => listThreads(live, { limit: 1 }));
