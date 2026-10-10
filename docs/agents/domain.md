@@ -30,7 +30,20 @@ Multi-context is **not** this repo's layout. It would be signalled by a `CONTEXT
 
 ## Naming
 
-This repo's domain vocabulary file is **`CONTEXT.md`**, and the multi-context map would be **`CONTEXT-MAP.md`**. The bundled skill templates (`domain-modeling`, and the upstream template this file came from) call that artifact `GLOSSARY.md` / `GLOSSARY-MAP.md`. Same artifact, this repo's name wins: read `CONTEXT.md`, and if you are a skill creating it lazily, create `CONTEXT.md` — not `GLOSSARY.md`.
+This repo's domain vocabulary file is **`CONTEXT.md`**, and the multi-context map
+would be **`CONTEXT-MAP.md`**. Some bundled skill templates — `domain-modeling`, and
+the upstream template this file was generated from, both installed under
+`node_modules/` — call that same artifact `GLOSSARY.md` / `GLOSSARY-MAP.md`. Those
+are aliases for one file, and this repo's name wins. Concretely:
+
+- **Read** `CONTEXT.md`.
+- **Create** `CONTEXT.md` when a skill creates it lazily — never `GLOSSARY.md`.
+- If a skill leaves a `GLOSSARY.md` here, **rename** it to `CONTEXT.md` instead of
+  keeping both side by side.
+
+The templates cannot be edited to say this (they are third-party files inside
+`node_modules/`, replaced on every plugin update), so the rule lives here rather
+than upstream.
 
 ## Use the glossary's vocabulary
 

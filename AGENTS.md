@@ -10,4 +10,4 @@ The five canonical triage roles, each label string equal to its role name: `need
 
 ### Domain docs
 
-single-context — one `CONTEXT.md` at the repo root, architecture decisions in `docs/adr/`. See `docs/agents/domain.md`.
+single-context — one `CONTEXT.md` at the repo root (skill templates alias it to `GLOSSARY.md`; the name here is `CONTEXT.md`), architecture decisions in `docs/adr/`. See `docs/agents/domain.md`.
