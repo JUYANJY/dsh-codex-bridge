@@ -29,6 +29,31 @@ exactly which parts are impossible rather than guessing.
 | `codex_approvals` | Lists pending approval requests and answers them. |
 | `codex_queue` | Shows the messages still waiting on a thread (`action=list`), and cancels one with `action=delete`. Reports what the app-server confirmed, since a live session usually consumes a queued message first. |
 
+## Board
+
+The same projection is also a panel inside Harness: a sidebar row named **Codex**
+opens a board whose columns are **waiting for approval**, **turn observed here**,
+**queued messages** and **no observed activity**.
+
+It is deliberately **read-only**. The panel polls one host route (a single
+`snapshot` endpoint) and holds no path to `codex_send` or `codex_approvals` at all:
+a board that could decline an approval by accident would be worse than no board.
+
+Three rules keep it honest, and they are why the columns are named the way they are:
+
+- A thread waiting on an approval is never filed under Queue, even when it also has
+  queued messages.
+- *Running* means **this bridge's connection saw `turn/started` and has not seen it
+  finish** — a statement about the connection, not about the machine. So the last
+  column is **no observed activity**, never "idle": silence from a
+  connection-scoped protocol is not proof that nothing is happening.
+- Queue inspection is sampled (a bounded number of threads per refresh, reported in
+  the snapshot's `probe` block), and the board says so rather than presenting a
+  partial count as a total.
+
+The client half is plain JS loaded by the web client — no build step, like the
+shipped client plugins. It shows up after a Harness restart.
+
 ## What you cannot do, and why
 
 Four of these are **structural**, not missing features — full evidence in
@@ -107,7 +132,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 46 unit tests, no Codex install required
+npm test            # 64 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
@@ -132,6 +157,9 @@ src/app-server.js     spawn, JSONL framing, request correlation, inbound request
 src/codex.js          protocol payloads -> compact records
 src/notifications.js  which notification methods matter, and how to describe them
 src/errors.js         the active-writer error and the explanation shown to users
+src/board.js          the read-only projection the tools and the board share
+src/board-channel.js  the host route the panel polls (one POST endpoint)
+src/client.js         the panel itself; loaded by the web client, never by Node
 src/tools/*.js        one factory per tool
 ```
 

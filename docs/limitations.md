@@ -137,3 +137,37 @@ the client side, which is why a client that omits it silently loses queueing.
 `codex_status` reports the plan and rate-limit windows for whichever credentials
 the local Codex install is using, and lists local `codex` processes. It is a
 local-account view; it is not a usage report for a team or an organisation.
+
+## 9. What the board's columns can and cannot mean
+
+The board is a different reader of the same protocol, so it inherits every
+limitation above and adds three of its own.
+
+**"Running" is connection-scoped, and only that.** `turn/started` and
+`turn/completed` are notifications, and notifications go to the connection that
+owns the turn (limitation 3). A bridge connection therefore knows a turn is
+running only when *it* saw the start and never saw the finish. The last column is
+named **no observed activity** rather than "idle" for exactly this reason: with a
+desktop-owned thread, "nothing observed" and "nothing happening" are different
+claims, and only the first one is available here.
+
+**Queue inspection is a floor, not a total.** `thread/queue/list` is one call per
+thread, so a snapshot probes a bounded number of them (`maxQueueProbes`, default
+6). The snapshot carries a `probe` block naming the threads it did not reach and
+the probes that failed; a failed probe is recorded there rather than being counted
+as "nothing waiting". The board prints that count instead of silently rounding a
+partial read up to a total.
+
+**The panel is the only part of this plugin that runs in the browser.** Its host
+half is an ordinary route on the connection service
+(`/api/codexboard`, `fetch.register`), so it lives and dies with the plugin; the
+panel itself is plain JS loaded by the web client with no build step, registered
+into the shell's own `sidebar.panellist` and keyed `main` slots. Two consequences
+worth knowing before editing it: the host half needs a Harness restart
+(limitation 6), and the client half needs a page refresh unless
+`pnpm run dev:web` is running.
+
+It performs **no writes**. The snapshot endpoint is the whole surface, and the
+panel has no path to a write method — that is a deliberate P0 boundary, not an
+unfinished feature.
+

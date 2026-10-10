@@ -13,6 +13,7 @@
  * @module dsh-codex-bridge
  */
 import z from "@deepseek-ai/schemastery";
+import { mountBoardChannel } from "./board-channel.js";
 import { CodexBridge } from "./bridge.js";
 import { allTools } from "./tools/index.js";
 
@@ -31,7 +32,21 @@ export const Config = z.object({
 });
 
 /**
- * Register the bridge tools on one plugin context.
+ * Surface a channel problem without failing plugin activation.
+ *
+ * The duplicate-route warning is expected on a live patch reload (the copy that
+ * already owns the route keeps serving), so it is not worth a console line.
+ *
+ * @param level - `"warn"` or `"error"`.
+ * @param message - what happened.
+ */
+function reportChannelIssue(level, message) {
+  if (level === "warn" && /yielded to a live copy/.test(message)) return;
+  console.warn(`[dsh-codex-bridge] ${message}`);
+}
+
+/**
+ * Register the bridge tools and the board route on one plugin context.
  * @param ctx - the cordis plugin context.
  * @param config - plugin configuration.
  */
@@ -46,9 +61,17 @@ export function apply(ctx, config = {}) {
   }
 
   for (const tool of tools) ctx.tools.register(tool);
+
+  try {
+    mountBoardChannel(ctx, bridge, { log: reportChannelIssue });
+  } catch (error) {
+    reportChannelIssue("error", `board channel not mounted: ${String(error?.message ?? error)}`);
+  }
 }
 
 export { ACTIVE_WRITER, ACTIVE_WRITER_HINT, isActiveWriterError } from "./errors.js";
 export { CodexAppServer, newClientMessageId, resolveCodexBin } from "./app-server.js";
 export { clamp, compactLimits, extractText, listCodexProcesses, listItems, listThreads, readAccountState, renderItem, resolveThreadId } from "./codex.js";
+export { BOARD_COLUMNS, buildBoard, collectBoard, observeTurnState } from "./board.js";
+export { RPC_CHANNEL, RPC_ROUTE, createRouteHandler, mountBoardChannel } from "./board-channel.js";
 export { TOOL_NAMES } from "./tools/index.js";

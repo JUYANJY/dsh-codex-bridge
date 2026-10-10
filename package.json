@@ -13,6 +13,7 @@
   "exports": {
     ".": { "default": "./src/index.js" },
     "./app-server": { "default": "./src/app-server.js" },
+    "./client": { "default": "./src/client.js" },
     "./package.json": "./package.json"
   },
   "files": [
@@ -41,6 +42,11 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": []
     }
   }
 }
