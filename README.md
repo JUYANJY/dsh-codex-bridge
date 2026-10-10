@@ -137,7 +137,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 68 unit tests, no Codex install required
+npm test            # 76 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
@@ -152,6 +152,12 @@ by environment variables:
 
 The smoke script is the only test that needs Codex installed, and it writes to no
 thread.
+
+`tests/client.test.js` renders the panel's React tree in the test process against
+a snapshot the host route would really serve, using a minimal React stand-in
+(no DOM, no browser). It covers the fields the panel reads, the coverage notes,
+the badge rules and the failure path. It does not cover the shell mounting the
+two seats, or anything visual — check those by eye.
 
 ### Layout
 

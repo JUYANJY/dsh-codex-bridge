@@ -2,9 +2,9 @@
  * Board tests: the read-only projection, the honest column rules, and the
  * host-side route the panel polls.
  *
- * The panel itself is not tested here (it is DOM); everything it decides is
- * decided in `buildBoard` and `collectBoard`, which are plain functions, so a
- * regression in "what the board claims is true" fails here instead of in the UI.
+ * The panel only displays what these functions decide, so "what the board claims
+ * is true" is asserted here, against plain values. What the panel then does with
+ * those values is asserted in `tests/client.test.js`.
  */
 import test from "node:test";
 import assert from "node:assert/strict";

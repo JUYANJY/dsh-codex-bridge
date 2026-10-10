@@ -190,3 +190,9 @@ It performs **no writes**. The snapshot endpoint is the whole surface, and the
 panel has no path to a write method — that is a deliberate P0 boundary, not an
 unfinished feature.
 
+Its React tree is rendered in the test process (`tests/client.test.js`) over a
+minimal React stand-in, against a snapshot shaped like the one the route serves:
+that catches a renamed field or a panel that throws. Two things stay outside
+every test — the shell mounting the two seats, and anything visual (CSS, widths,
+colours). Both need a browser and an eye.
+
