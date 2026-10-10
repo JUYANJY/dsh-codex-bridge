@@ -135,3 +135,7 @@ src/tools/*.js        one factory per tool
 
 - Node >= 22 (uses `node:test`, ESM, `randomUUID`)
 - A Codex install for anything live; the unit tests need none
+
+## License
+
+MIT — see [`LICENSE`](./LICENSE).

@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "description": "Observe and steer a local Codex (OpenAI) session from DeepSeek Harness, over the codex app-server protocol.",
   "license": "MIT",
+  "author": "JUYANJY",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JUYANJY/dsh-codex-bridge.git"
+  },
   "type": "module",
   "main": "src/index.js",
   "exports": {
