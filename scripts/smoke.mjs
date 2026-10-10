@@ -14,6 +14,7 @@ import { CodexAppServer, resolveCodexBin } from "../src/app-server.js";
 import { CodexBridge } from "../src/bridge.js";
 import { allTools, TOOL_NAMES } from "../src/tools/index.js";
 import { compactLimits, listThreads, readAccountState } from "../src/codex.js";
+import { collectBoard } from "../src/board.js";
 import * as plugin from "../src/index.js";
 
 let failures = 0;
@@ -82,6 +83,32 @@ if (probe) {
 } else {
   check(true, "thread/queue/list", "skipped — no recent thread to probe");
 }
+
+// The board's cards read `thread/items/list` for their "last" line, so the method
+// has to answer on this build too. Read-only, and safe on a live thread.
+if (probe) {
+  const items = await client.call("thread/items/list", { threadId: probe, limit: 3, sortDirection: "desc" });
+  const entries = items?.data ?? [];
+  check(Array.isArray(items?.data), "thread/items/list answered", `${entries.length} recent item(s)`);
+  check(
+    entries.every((entry) => typeof entry?.item?.type === "string"),
+    "every item carries a type",
+  );
+} else {
+  check(true, "thread/items/list", "skipped — no recent thread to probe");
+}
+
+// One whole board snapshot: every method it touches is a read, so this is safe
+// against a live app-server and proves the projection end to end.
+const snapshot = await collectBoard(client, null, { maxThreads: 3, maxQueueProbes: 1, maxItemProbes: 1, includeAccount: false });
+check(snapshot.columns.length === 4, "collectBoard built the four columns", `${snapshot.totals.threads} thread(s) listed`);
+check(snapshot.probe.maxItemProbes === 1, "collectBoard honours maxItemProbes", `probed ${snapshot.probe.itemProbed.length}, failed ${snapshot.probe.itemProbeErrors.length}`);
+const labelled = snapshot.columns.flatMap((column) => column.cards).filter((card) => card.lastItem !== null);
+check(
+  labelled.length > 0 || snapshot.probe.itemProbeErrors.length > 0,
+  "the probed thread came back with a last item",
+  labelled.length > 0 ? `${labelled[0].lastItem.type}: ${labelled[0].lastItem.text.split("\n")[0].slice(0, 48)}` : "no item was readable",
+);
 
 // The bridge is what the tools actually hold; make sure it can hand one out.
 const bridge = new CodexBridge({ binary: bin, requestTimeoutMs: 5000 });

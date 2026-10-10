@@ -216,18 +216,20 @@ window.__ModuleLoader__.load({
         notes.push(h("div", { key: "err", className: "dcb_note", "data-kind": "error" },
           "Last read failed: " + error + (board ? " — showing the previous snapshot." : "")));
       }
-      if (board && board.probe && !board.probe.queueCoverageComplete) {
+      // Both coverage notes fire only when the host says so explicitly (`=== false`),
+      // so a panel loaded ahead of its host half simply says less instead of throwing.
+      if (board && board.probe && board.probe.queueCoverageComplete === false) {
         const probe = board.probe;
-        const missed = probe.queueProbeErrors.length + probe.queueUnprobedThreadIds.length;
+        const missed = (probe.queueProbeErrors || []).length + (probe.queueUnprobedThreadIds || []).length;
         notes.push(h("div", { key: "cov", className: "dcb_note" },
-          "Queue coverage is partial: " + probe.queueProbed.length + " of " + probe.threadsListed
+          "Queue coverage is partial: " + (probe.queueProbed || []).length + " of " + probe.threadsListed
           + " threads were probed (" + missed + " not), so the Queued column is a floor, not a total."));
       }
-      if (board && board.probe && !board.probe.itemCoverageComplete) {
+      if (board && board.probe && board.probe.itemCoverageComplete === false) {
         const probe = board.probe;
-        const missed = probe.itemProbeErrors.length + probe.itemUnprobedThreadIds.length;
+        const missed = (probe.itemProbeErrors || []).length + (probe.itemUnprobedThreadIds || []).length;
         notes.push(h("div", { key: "icov", className: "dcb_note" },
-          "Last-action coverage is partial: " + probe.itemProbed.length + " of " + probe.threadsListed
+          "Last-action coverage is partial: " + (probe.itemProbed || []).length + " of " + probe.threadsListed
           + " threads were probed (" + missed + " not), so cards without a last line were simply not read."));
       }
 
