@@ -1,0 +1,10 @@
+# Loader patch fragment for this plugin.
+#
+# DSH merges a bundle's patch into the active profile's `cordis.patch.yml`.
+# The entry id is what `plugin_manager` addresses; the name is the package
+# specifier resolved from the profile's node_modules.
+- insert:
+    - id: dsh-codex-bridge
+      name: dsh-codex-bridge
+      config:
+        requestTimeoutMs: 30000
