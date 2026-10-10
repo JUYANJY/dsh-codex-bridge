@@ -40,8 +40,8 @@ A response is correlated by `id`; an error is turned into an `Error` carrying
 | `thread/list` | `codex_threads`, thread resolution | `{ limit, cwd? }` |
 | `thread/items/list` | `codex_transcript`, `codex_watch` | `{ threadId, limit, sortDirection }` |
 | `thread/queue/add` | `codex_send` | the cross-process write path |
-| `thread/queue/list` | queue inspection | `{ threadId }` |
-| `thread/queue/delete` | queue cleanup | needs `{ threadId, queuedSubmissionId }` |
+| `thread/queue/list` | `codex_queue action=list` | `{ threadId }`; entries carry no order field |
+| `thread/queue/delete` | `codex_queue action=delete` | needs `{ threadId, queuedSubmissionId }`; answers `{ deleted }` |
 | `thread/resume` | `codex_send mode=turn` | fails on a desktop-owned thread |
 | `turn/start` | `codex_send mode=turn` | needs this process to own the thread |
 | `turn/steer` | `codex_send mode=steer` | needs `expectedTurnId`; same lock problem |

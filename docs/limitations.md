@@ -48,14 +48,21 @@ Verified reply shape (there is **no** queue-order field):
 
 This is why the tool reports `queued as <id>` and not an order number.
 
-A queued message is **delivered promptly and cannot be recalled** — in testing, a
-message queued onto a live thread was picked up and acted on almost immediately.
-Treat `codex_send` as a real write, not a draft. Cancelling requires
-`thread/queue/delete` with **both** `threadId` and `queuedSubmissionId`:
+A queued message is **delivered promptly** — in testing, a message queued onto a
+live thread was picked up and acted on almost immediately — so treat `codex_send`
+as a real write, not a draft. Cancellation exists but it is a **race, not an undo**.
+`codex_queue action=delete` calls `thread/queue/delete`, which needs **both**
+`threadId` and `queuedSubmissionId`:
 
 ```json
 { "threadId": "…", "queuedSubmissionId": "01a12470-…" }   →  { "deleted": true }
 ```
+
+The tool refuses to guess either argument — unlike `action=list`, it will not fall
+back to "the newest thread for this project" for a destructive call — and it
+reports the server's answer rather than assuming. `{ "deleted": false }` means the
+entry was already consumed or never existed under that thread: by then the write
+has landed and nothing here can take it back.
 
 ## 3. Live notifications go only to the connection that owns the turn
 

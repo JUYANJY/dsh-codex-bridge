@@ -27,6 +27,7 @@ exactly which parts are impossible rather than guessing.
 | `codex_watch` | Watches a thread for N seconds and returns what streamed past, merging the live notification stream with transcript polls and labelling each event's `source`. |
 | `codex_send` | `queue` (default), `turn`, or `steer`. Falls back to the queue when the desktop app holds the thread's write lock. |
 | `codex_approvals` | Lists pending approval requests and answers them. |
+| `codex_queue` | Shows the messages still waiting on a thread (`action=list`), and cancels one with `action=delete`. Reports what the app-server confirmed, since a live session usually consumes a queued message first. |
 
 ## What you cannot do, and why
 
@@ -46,8 +47,11 @@ Four of these are **structural**, not missing features — full evidence in
    `(reasoning not exposed: encrypted)` when there is none — not the hidden chain
    of thought.
 
-Also: `codex_send` is a **real write** and cannot be recalled. A queued message is
-picked up promptly.
+Also: `codex_send` is a **real write**. A queued message is picked up promptly — in
+testing, almost immediately — so queueing is sending, not drafting.
+`codex_queue action=delete` can cancel an entry that is still waiting, but that is
+a race rather than an undo: the tool reports the app-server's own answer instead of
+assuming the message never went out.
 
 ## Install
 
