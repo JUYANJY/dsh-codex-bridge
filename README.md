@@ -31,7 +31,7 @@ exactly which parts are impossible rather than guessing.
 ## What you cannot do, and why
 
 Four of these are **structural**, not missing features — full evidence in
-[`docs/limitations.md`](./limitations.md):
+[`docs/limitations.md`](./docs/limitations.md):
 
 1. **The desktop app holds an exclusive write lock on every thread it has opened**,
    even while idle. So `turn`/`steer` are unavailable for those threads and
