@@ -141,7 +141,7 @@ local-account view; it is not a usage report for a team or an organisation.
 ## 9. What the board's columns can and cannot mean
 
 The board is a different reader of the same protocol, so it inherits every
-limitation above and adds three of its own.
+limitation above and adds four of its own.
 
 **"Running" is connection-scoped, and only that.** `turn/started` and
 `turn/completed` are notifications, and notifications go to the connection that
@@ -157,6 +157,25 @@ thread, so a snapshot probes a bounded number of them (`maxQueueProbes`, default
 the probes that failed; a failed probe is recorded there rather than being counted
 as "nothing waiting". The board prints that count instead of silently rounding a
 partial read up to a total.
+
+**A card's "last" line is the last *recorded* item, and its status is quoted, not
+interpreted.** `thread/items/list` is one more call per thread (`maxItemProbes`,
+default 6, reported in the same `probe` block), read newest-first. Two details are
+deliberate:
+
+- `reasoning` items are skipped for the label, because they trail nearly every turn
+  and their text is encrypted (`(reasoning not exposed: encrypted)`); the newest
+  non-reasoning item is the one that says what actually happened. A thread whose
+  only items are reasoning keeps the reasoning line rather than inventing a summary.
+- the status shown (`inProgress`, `failed`, …) is the status *of the item the label
+  came from*, printed verbatim as the protocol reported it. It is not promoted to a
+  column: a stale `inProgress` item left by an interrupted run must not be able to
+  make the board claim a turn is running, so `running` still means only "this
+  connection saw `turn/started` and has not seen it finish".
+
+Measured while writing this: `thread/items/list` answers for threads this connection
+does not own (unlike notifications), so the last line is available for desktop-run
+threads too — it is a read of the rollout, not of the live stream.
 
 **The panel is the only part of this plugin that runs in the browser.** Its host
 half is an ordinary route on the connection service

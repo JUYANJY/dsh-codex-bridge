@@ -13,17 +13,37 @@
  *    has not seen it finish;
  *  - approval counts cover only the server requests this process is holding;
  *  - queue counts are only as complete as the probes that actually ran, and the
- *    snapshot carries that coverage with it.
+ *    snapshot carries that coverage with it;
+ *  - a card's "last" line is the newest item the rollout reports that is not
+ *    encrypted reasoning, and its status is printed verbatim: neither is turned
+ *    into a claim about the turn.
  *
  * @module dsh-codex-bridge/board
  */
-import { compactLimits, listThreads, readAccountState } from "./codex.js";
+import { clamp, compactLimits, listThreads, readAccountState, renderItem } from "./codex.js";
 
 /** How many recent threads one snapshot looks at. */
 export const DEFAULT_MAX_THREADS = 12;
 
 /** How many of those threads get a `thread/queue/list` probe (each probe is one round trip). */
 export const DEFAULT_MAX_QUEUE_PROBES = 6;
+
+/** How many of those threads get a `thread/items/list` probe for their last action. */
+export const DEFAULT_MAX_ITEM_PROBES = 6;
+
+/** How many recent items one probe reads: enough to look past the trailing reasoning items. */
+export const ITEM_PROBE_LIMIT = 3;
+
+/** How much of an item's text reaches a card label. */
+export const LAST_ITEM_CHARS = 180;
+
+/**
+ * Item types the card label skips.
+ *
+ * Reasoning items trail almost every turn and their text is encrypted, so the
+ * newest non-reasoning item is the one that says what actually happened last.
+ */
+const UNLABELED_ITEM_TYPES = new Set(["reasoning"]);
 
 /**
  * Board columns, in display order.
@@ -113,13 +133,14 @@ function byRecency(a, b) {
 
 /**
  * Build the board from already-collected facts. Pure.
- * @param input - `{ threads, queues, approvals, turns, now }`.
+ * @param input - `{ threads, queues, items, approvals, turns, now }`.
  * @returns `{ generatedAt, columns, totals, unattachedApprovals }`.
  */
 export function buildBoard(input = {}) {
   const now = Number.isFinite(input.now) ? input.now : Date.now();
   const threads = Array.isArray(input.threads) ? input.threads : [];
   const queues = input.queues ?? {};
+  const items = input.items ?? {};
   const approvals = Array.isArray(input.approvals) ? input.approvals : [];
   const turns = input.turns instanceof Map ? input.turns : new Map();
 
@@ -143,6 +164,7 @@ export function buildBoard(input = {}) {
     const queued = Array.isArray(queues[thread.id]) ? queues[thread.id] : [];
     const waitingCount = waitingByThread.get(thread.id) ?? 0;
     const turn = turns.get(thread.id) ?? null;
+    const probed = items[thread.id] ?? null;
     const column = waitingCount > 0
       ? "waiting-approval"
       : (turn ? "running" : (queued.length > 0 ? "queued" : "unobserved"));
@@ -157,6 +179,14 @@ export function buildBoard(input = {}) {
       queuedCount: queued.length,
       waitingCount,
       turnStartedAt: turn ? new Date(turn.at).toISOString() : null,
+      lastItem: probed?.last
+        ? {
+          type: probed.last.type ?? null,
+          text: clamp(probed.last.text ?? "", LAST_ITEM_CHARS),
+          turnId: probed.last.turnId ?? null,
+        }
+        : null,
+      lastItemStatus: probed?.status ?? null,
       column,
     };
   });
@@ -188,27 +218,28 @@ export function buildBoard(input = {}) {
 /**
  * Ask the app-server for one board snapshot.
  *
- * Read-only by construction: `thread/list`, `thread/queue/list`, `account/read`
- * and `account/rateLimits/read` are all reads, and the only other input is the
- * in-process notification buffer.
+ * Read-only by construction: `thread/list`, `thread/items/list`,
+ * `thread/queue/list`, `account/read` and `account/rateLimits/read` are all
+ * reads, and the only other input is the in-process notification buffer.
  *
  * @param client - a started app-server client.
  * @param bridge - the shared bridge (for the retained notification stream).
- * @param options - `{ maxThreads, maxQueueProbes, includeAccount }`.
+ * @param options - `{ maxThreads, maxQueueProbes, maxItemProbes, includeAccount }`.
  * @returns the board plus a `probe` block saying what was and was not looked at.
  */
 export async function collectBoard(client, bridge = null, options = {}) {
   const maxThreads = options.maxThreads ?? DEFAULT_MAX_THREADS;
   const maxQueueProbes = Math.min(options.maxQueueProbes ?? DEFAULT_MAX_QUEUE_PROBES, maxThreads);
+  const maxItemProbes = Math.min(options.maxItemProbes ?? DEFAULT_MAX_ITEM_PROBES, maxThreads);
   const includeAccount = options.includeAccount !== false;
 
   const threads = await listThreads(client, { limit: maxThreads });
-  const candidateIds = threads.slice(0, maxQueueProbes).map((thread) => thread.id);
 
   const queues = {};
   const probed = [];
   const probeErrors = [];
-  await Promise.all(candidateIds.map(async (threadId) => {
+  await Promise.all(threads.slice(0, maxQueueProbes).map(async (thread) => {
+    const threadId = thread.id;
     try {
       const result = await client.call("thread/queue/list", { threadId });
       queues[threadId] = Array.isArray(result?.data) ? result.data : [];
@@ -219,6 +250,33 @@ export async function collectBoard(client, bridge = null, options = {}) {
     }
   }));
 
+  const items = {};
+  const itemProbed = [];
+  const itemProbeErrors = [];
+  await Promise.all(threads.slice(0, maxItemProbes).map(async (thread) => {
+    const threadId = thread.id;
+    try {
+      const result = await client.call("thread/items/list", {
+        threadId,
+        limit: ITEM_PROBE_LIMIT,
+        sortDirection: "desc",
+      });
+      const entries = (Array.isArray(result?.data) ? result.data : [])
+        .map((entry) => ({ item: entry?.item, turnId: entry?.turnId ?? null }))
+        .filter((entry) => entry.item && typeof entry.item === "object");
+      const newest = entries[0] ?? null;
+      const labelled = entries.find((entry) => !UNLABELED_ITEM_TYPES.has(entry.item.type)) ?? newest;
+      items[threadId] = {
+        last: labelled ? { ...renderItem(labelled.item), turnId: labelled.turnId } : null,
+        status: labelled?.item?.status ?? null,
+      };
+      itemProbed.push(threadId);
+    } catch (error) {
+      items[threadId] = { last: null, status: null };
+      itemProbeErrors.push({ threadId, message: String(error?.message ?? error) });
+    }
+  }));
+
   const approvals = (client.pendingServerRequests?.() ?? []).map((request) => ({
     id: request?.id ?? null,
     method: request?.method ?? null,
@@ -226,7 +284,7 @@ export async function collectBoard(client, bridge = null, options = {}) {
   }));
 
   const turns = observeTurnState(bridge?.recentNotifications ?? []);
-  const board = buildBoard({ threads, queues, approvals, turns });
+  const board = buildBoard({ threads, queues, items, approvals, turns });
 
   let account = null;
   if (includeAccount) {
@@ -244,6 +302,7 @@ export async function collectBoard(client, bridge = null, options = {}) {
   }
 
   const unprobed = threads.filter((thread) => !probed.includes(thread.id) && !probeErrors.some((entry) => entry.threadId === thread.id));
+  const itemUnprobed = threads.filter((thread) => !itemProbed.includes(thread.id) && !itemProbeErrors.some((entry) => entry.threadId === thread.id));
 
   return {
     ...board,
@@ -251,11 +310,16 @@ export async function collectBoard(client, bridge = null, options = {}) {
     probe: {
       maxThreads,
       maxQueueProbes,
+      maxItemProbes,
       threadsListed: threads.length,
       queueProbed: probed,
       queueProbeErrors: probeErrors,
       queueUnprobedThreadIds: unprobed.map((thread) => thread.id),
       queueCoverageComplete: unprobed.length === 0 && probeErrors.length === 0,
+      itemProbed,
+      itemProbeErrors,
+      itemUnprobedThreadIds: itemUnprobed.map((thread) => thread.id),
+      itemCoverageComplete: itemUnprobed.length === 0 && itemProbeErrors.length === 0,
       notificationsRetained: (bridge?.recentNotifications ?? []).length,
     },
   };

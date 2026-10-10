@@ -73,6 +73,10 @@ window.__ModuleLoader__.load({
 .dcb_badge{font-size:10.5px;border-radius:999px;padding:1px 7px;border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-secondary)}
 .dcb_badge[data-kind=wait]{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
 .dcb_badge[data-kind=queue]{color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary)}
+.dcb_badge[data-kind=status]{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-secondary)}
+.dcb_last{font-size:11px;line-height:1.5;margin:5px 0 0;overflow-wrap:anywhere}
+.dcb_lastKind{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary);margin-right:5px}
+.dcb_lastText{color:var(--dsw-alias-label-secondary)}
 .dcb_empty{font-size:11.5px;color:var(--dsw-alias-label-tertiary);text-align:center;padding:14px 6px}
 .dcb_cwd{font-size:10px;color:var(--dsw-alias-label-tertiary);font-family:var(--ds-font-family-code);margin-top:5px;overflow-wrap:anywhere}
 `;
@@ -137,6 +141,10 @@ window.__ModuleLoader__.load({
      */
     function Card({ card }) {
       const badges = [];
+      const itemStatus = card.lastItemStatus;
+      if (itemStatus && String(itemStatus).toLowerCase() !== "completed") {
+        badges.push(h("span", { key: "s", className: "dcb_badge", "data-kind": "status" }, String(itemStatus)));
+      }
       if (card.waitingCount > 0) {
         badges.push(h("span", { key: "w", className: "dcb_badge", "data-kind": "wait" }, card.waitingCount + " awaiting approval"));
       }
@@ -153,6 +161,10 @@ window.__ModuleLoader__.load({
         ),
         card.title ? h("div", { className: "dcb_cardTitle" }, card.title) : null,
         card.preview ? h("div", { className: "dcb_preview" }, card.preview) : null,
+        card.lastItem ? h("div", { className: "dcb_last" },
+          h("span", { className: "dcb_lastKind" }, "last " + (card.lastItem.type || "item")),
+          h("span", { className: "dcb_lastText" }, card.lastItem.text)
+        ) : null,
         badges.length > 0 ? h("div", { className: "dcb_badges" }, badges) : null,
         card.cwd ? h("div", { className: "dcb_cwd" }, card.cwd) : null
       );
@@ -210,6 +222,13 @@ window.__ModuleLoader__.load({
         notes.push(h("div", { key: "cov", className: "dcb_note" },
           "Queue coverage is partial: " + probe.queueProbed.length + " of " + probe.threadsListed
           + " threads were probed (" + missed + " not), so the Queued column is a floor, not a total."));
+      }
+      if (board && board.probe && !board.probe.itemCoverageComplete) {
+        const probe = board.probe;
+        const missed = probe.itemProbeErrors.length + probe.itemUnprobedThreadIds.length;
+        notes.push(h("div", { key: "icov", className: "dcb_note" },
+          "Last-action coverage is partial: " + probe.itemProbed.length + " of " + probe.threadsListed
+          + " threads were probed (" + missed + " not), so cards without a last line were simply not read."));
       }
 
       const columns = board

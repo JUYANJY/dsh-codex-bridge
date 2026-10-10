@@ -39,7 +39,7 @@ It is deliberately **read-only**. The panel polls one host route (a single
 `snapshot` endpoint) and holds no path to `codex_send` or `codex_approvals` at all:
 a board that could decline an approval by accident would be worse than no board.
 
-Three rules keep it honest, and they are why the columns are named the way they are:
+Four rules keep it honest, and they are why the columns are named the way they are:
 
 - A thread waiting on an approval is never filed under Queue, even when it also has
   queued messages.
@@ -47,9 +47,14 @@ Three rules keep it honest, and they are why the columns are named the way they 
   finish** — a statement about the connection, not about the machine. So the last
   column is **no observed activity**, never "idle": silence from a
   connection-scoped protocol is not proof that nothing is happening.
-- Queue inspection is sampled (a bounded number of threads per refresh, reported in
-  the snapshot's `probe` block), and the board says so rather than presenting a
-  partial count as a total.
+- Every card carries a **last** line: the newest item the rollout reports that is not
+  encrypted reasoning (`reasoning` items trail almost every turn and their text is
+  sealed), with that item's own status printed verbatim — `inProgress`, `failed`,
+  whatever the protocol said. It reports what the thread last did; it is not a claim
+  that a turn is running.
+- Queue and last-action inspection are sampled (a bounded number of threads per
+  refresh, reported in the snapshot's `probe` block), and the board says so rather
+  than presenting a partial read as a total.
 
 The client half is plain JS loaded by the web client — no build step, like the
 shipped client plugins. It shows up after a Harness restart.
@@ -132,7 +137,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 64 unit tests, no Codex install required
+npm test            # 68 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 

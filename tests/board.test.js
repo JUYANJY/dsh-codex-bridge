@@ -111,6 +111,7 @@ test("collectBoard says which threads it did not probe", async () => {
       ],
     }),
     "thread/queue/list": (params) => ({ data: params.threadId === "T1" ? [{ id: "q1" }] : [] }),
+    "thread/items/list": () => ({ data: [] }),
     "account/read": () => ({ account: { email: "someone@example.com" } }),
     "account/rateLimits/read": () => ({ rateLimits: { planType: "plus", primary: { usedPercent: 12, windowDurationMins: 300 } } }),
   });
@@ -131,12 +132,81 @@ test("a failed queue probe is reported instead of silently counted as zero", asy
   const client = stubClient({
     "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1000 }] }),
     "thread/queue/list": () => { throw new Error("thread/queue/list is not available"); },
+    "thread/items/list": () => ({ data: [] }),
   });
   const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 1, maxQueueProbes: 1, includeAccount: false });
   assert.equal(board.probe.queueCoverageComplete, false);
   assert.equal(board.probe.queueProbeErrors.length, 1);
   assert.match(board.probe.queueProbeErrors[0].message, /not available/);
   assert.equal(board.account, null);
+});
+
+/** One `thread/items/list` entry, shaped like the real reply. */
+function itemEntry(item) {
+  return { turnId: "turn-1", itemId: item.id, item };
+}
+
+test("a card's last line is the newest item that is not encrypted reasoning", async () => {
+  const client = stubClient({
+    "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1000 }, { id: "T2", preview: "b", updatedAt: 900 }] }),
+    "thread/queue/list": () => ({ data: [] }),
+    "thread/items/list": (params) => ({
+      data: params.threadId === "T1"
+        ? [
+          itemEntry({ id: "r1", type: "reasoning", summary: [] }),
+          itemEntry({ id: "c1", type: "commandExecution", command: "ls -la", status: "inProgress" }),
+        ]
+        : [],
+    }),
+  });
+
+  const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 2, maxItemProbes: 1, includeAccount: false });
+  const card = board.columns.find((column) => column.id === "unobserved").cards.find((entry) => entry.threadId === "T1");
+  assert.equal(card.lastItem.type, "commandExecution");
+  assert.equal(card.lastItem.turnId, "turn-1");
+  assert.match(card.lastItem.text, /ls -la/);
+  assert.equal(card.lastItemStatus, "inProgress", "the status belongs to the item the label came from");
+  assert.deepEqual(board.probe.itemProbed, ["T1"]);
+  assert.deepEqual(board.probe.itemUnprobedThreadIds, ["T2"]);
+  assert.equal(board.probe.itemCoverageComplete, false);
+});
+
+test("a card with no readable item is left blank, not filled in", () => {
+  const allReasoning = buildBoard({
+    now: 1_000_000,
+    threads: [THREAD("T1", 999)],
+    items: { T1: { last: { type: "reasoning", text: "(reasoning not exposed: encrypted)", turnId: "turn-1" }, status: null } },
+  });
+  const card = allReasoning.columns.find((column) => column.id === "unobserved").cards[0];
+  assert.equal(card.lastItem.type, "reasoning");
+  assert.equal(card.lastItemStatus, null);
+  assert.equal(buildBoard({ threads: [THREAD("T1", 999)] }).columns.at(-1).cards[0].lastItem, null);
+});
+
+test("a card's last text is clamped, like every other projected field", () => {
+  const board = buildBoard({
+    now: 1_000_000,
+    threads: [THREAD("T1", 999)],
+    items: { T1: { last: { type: "agentMessage", text: "x".repeat(5000) } } },
+  });
+  const card = board.columns.find((column) => column.id === "unobserved").cards[0];
+  assert.ok(card.lastItem.text.length < 5000);
+  assert.match(card.lastItem.text, /truncated \d+ chars/);
+});
+
+test("a failed item probe is reported, not rendered as a thread with no history", async () => {
+  const client = stubClient({
+    "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1000 }] }),
+    "thread/queue/list": () => ({ data: [] }),
+    "thread/items/list": () => { throw new Error("thread/items/list is not available"); },
+  });
+  const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 1, includeAccount: false });
+  assert.equal(board.probe.itemCoverageComplete, false);
+  assert.equal(board.probe.itemProbeErrors.length, 1);
+  assert.equal(board.probe.itemProbeErrors[0].threadId, "T1");
+  const card = board.columns.find((column) => column.id === "unobserved").cards[0];
+  assert.equal(card.lastItem, null);
+  assert.equal(card.lastItemStatus, null);
 });
 
 /** Build a POST request carrying the client's envelope. */
@@ -195,6 +265,7 @@ test("mountBoardChannel registers the exact route and yields to a live copy", as
   const client = stubClient({
     "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1000 }] }),
     "thread/queue/list": () => ({ data: [] }),
+    "thread/items/list": () => ({ data: [itemEntry({ id: "a1", type: "agentMessage", text: "hello" })] }),
   });
   const bridge = { connection: async () => client, recentNotifications: [] };
   const ctx = {
