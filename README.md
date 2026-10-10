@@ -98,6 +98,12 @@ node scripts/install.mjs --write-config # also append the loader entry if missin
 It targets `~/.dsh/profiles/desktop` by default; override with
 `--profile <dir>` or `DSH_PROFILE_DIR`.
 
+The npm package is `@juyanjy/dsh-codex-bridge` — the unscoped `dsh-codex-bridge`
+on npm belongs to an unrelated project, so it is not ours to use. The loader
+entry keeps the short id `dsh-codex-bridge` on purpose: a profile resolves that
+`name` as a module specifier, so it has to match the directory the install
+creates, and that is the directory shown above.
+
 Then restart DeepSeek Harness. **This is not optional**: `patchReload: live`
 re-reads config, not module code, so a running Harness keeps the module it already
 imported (see limitation 6).

@@ -1,5 +1,5 @@
 {
-  "name": "dsh-codex-bridge",
+  "name": "@juyanjy/dsh-codex-bridge",
   "version": "0.1.0",
   "description": "Observe and steer a local Codex (OpenAI) session from DeepSeek Harness, over the codex app-server protocol.",
   "license": "MIT",
@@ -24,6 +24,9 @@
   ],
   "engines": {
     "node": ">=22"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "scripts": {
     "test": "node --test tests/*.test.js",

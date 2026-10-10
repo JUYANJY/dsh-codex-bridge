@@ -9,6 +9,13 @@
  *   <profile>/vendor/dsh-codex-bridge          -> <this checkout>
  *   <profile>/node_modules/dsh-codex-bridge    -> ../vendor/dsh-codex-bridge
  *
+ * `dsh-codex-bridge` here is the *local* install id — the directory name and the
+ * loader entry's `name`, which have to agree with each other. It is deliberately
+ * not the npm package name: that is `@juyanjy/dsh-codex-bridge` (the unscoped
+ * name on npm belongs to an unrelated project), and a profile that installs the
+ * published package through a package manager gets whatever directory that
+ * manager creates, with a matching entry name.
+ *
  * The second hop is kept because it is the layout the profile already used; a
  * pre-existing real directory at either path is moved aside, never deleted, and
  * `uninstall.mjs` puts it back.
@@ -32,6 +39,7 @@ import { fileURLToPath } from "node:url";
 
 const WORKSPACE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_FILE = join(WORKSPACE, ".install-state.json");
+/** Local install id: the profile directory name and the loader entry's `name`. */
 const PLUGIN_NAME = "dsh-codex-bridge";
 
 const YAML_ENTRY = `- insert:
