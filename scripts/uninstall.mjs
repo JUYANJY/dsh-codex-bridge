@@ -37,10 +37,10 @@ function kind(path) {
   }
 }
 
-/** @returns whether the symlink at `path` resolves into this checkout. */
-function pointsAtWorkspace(path) {
+/** @returns whether the symlink at `path` resolves to `target`. */
+function isSymlinkTo(path, target) {
   if (kind(path) !== "symlink") return false;
-  return resolve(dirname(path), readlinkSync(path)) === WORKSPACE;
+  return resolve(dirname(path), readlinkSync(path)) === target;
 }
 
 /** Report, and only act when not a dry run. */
@@ -57,17 +57,26 @@ console.log(`workspace : ${WORKSPACE}`);
 console.log(`profile   : ${state.profileDir}`);
 console.log(`dry run   : ${dryRun}\n`);
 
-// 1. The name the profile resolves.
-if (kind(state.linkDir) === "symlink") {
+// 1. The name the profile resolves. It points at the vendor hop, not at us, so
+//    the check compares against vendorDir rather than WORKSPACE.
+if (isSymlinkTo(state.linkDir, state.vendorDir)) {
   step(() => unlinkSync(state.linkDir), `remove ${state.linkDir}`);
 } else if (kind(state.linkDir) === "missing") {
   console.log(`· ${state.linkDir} already gone`);
 } else {
-  console.log(`! ${state.linkDir} is not a symlink; leaving it alone`);
+  console.log(`! ${state.linkDir} does not point at this checkout's vendor path; leaving it alone`);
+}
+
+if (state.linkBackup) {
+  if (kind(state.linkBackup) !== "missing" && kind(state.linkDir) === "missing") {
+    step(() => renameSync(state.linkBackup, state.linkDir), `restore ${state.linkDir} from ${state.linkBackup}`);
+  } else if (kind(state.linkBackup) !== "missing") {
+    console.log(`! backup ${state.linkBackup} left in place (target path is occupied)`);
+  }
 }
 
 // 2. The vendor hop, then the copy that was moved aside.
-if (pointsAtWorkspace(state.vendorDir)) {
+if (isSymlinkTo(state.vendorDir, WORKSPACE)) {
   step(() => unlinkSync(state.vendorDir), `remove ${state.vendorDir}`);
 } else if (kind(state.vendorDir) === "missing") {
   console.log(`· ${state.vendorDir} already gone`);
