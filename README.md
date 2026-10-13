@@ -78,8 +78,11 @@ brief**, which renders the same markdown `codex_handoff` builds, with a Copy
 button. The third is the one write path:
 
 **Keep Codex moving for 30m** arms the autopilot. While armed, and only then, a
-host-side timer may queue a continuation message into a thread that is Blocked or
-Needs-you, through `thread/queue/add` — the same single write `codex_send` uses.
+host-side timer may queue a continuation message into a thread that is **Blocked**,
+through `thread/queue/add` — the same single write `codex_send` uses. It never
+continues from **Needs you**: a red thread is one where a person has to decide
+something (an approval, a failed turn, a goal Codex itself marked blocked), and
+"keep it moving" must not paper over that.
 It skips a thread when an approval is pending, when the newest turn failed or asked
 a question, when the thread's queue is not empty, when a turn moved less than 90
 seconds ago, when it already sent to the same stuck turn, or when that thread has
