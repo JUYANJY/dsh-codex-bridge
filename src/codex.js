@@ -214,6 +214,116 @@ export async function listItems(client, params) {
 }
 
 /**
+ * Turn an epoch timestamp into ISO, accepting seconds or milliseconds.
+ *
+ * `thread/turns/list` and `thread/goal/get` both report epoch **seconds**
+ * (verified against a live app-server), but the tolerance costs nothing and
+ * keeps a millisecond payload from being read as 1970.
+ *
+ * @param value - epoch seconds or milliseconds.
+ * @returns an ISO string, or null.
+ */
+export function epochToIso(value) {
+  const number = Number(value);
+  if (!Number.isFinite(number) || number <= 0) return null;
+  return new Date(number > 1e12 ? number : number * 1000).toISOString();
+}
+
+/**
+ * Project one `thread/turns/list` entry into a compact record.
+ *
+ * Verified shape (live app-server, 2026-10-13): `{ id, items, itemsView, status,
+ * error, startedAt, completedAt, durationMs }` with `status` one of
+ * `completed | failed | interrupted` and `error` carried only by failed turns.
+ *
+ * @param turn - a raw turn.
+ * @returns the compact turn.
+ */
+export function compactTurn(turn = {}) {
+  return {
+    id: turn.id ?? null,
+    status: turn.status ?? null,
+    error: turn.error
+      ? {
+        message: clamp(String(turn.error.message ?? "").replace(/\s+/g, " ").trim(), 400),
+        info: turn.error.codexErrorInfo ?? null,
+      }
+      : null,
+    startedAt: epochToIso(turn.startedAt),
+    completedAt: epochToIso(turn.completedAt),
+    durationMs: typeof turn.durationMs === "number" ? turn.durationMs : null,
+    items: compactTurnItems(turn.items),
+  };
+}
+
+/**
+ * Count a turn's items by type and keep its message texts.
+ * @param items - `turn.items`.
+ * @returns `{ count, counts, messages }`.
+ */
+export function compactTurnItems(items) {
+  const list = Array.isArray(items) ? items : [];
+  const counts = {};
+  const messages = [];
+  for (const item of list) {
+    const type = item?.type ?? "unknown";
+    counts[type] = (counts[type] ?? 0) + 1;
+    if (type === "agentMessage" || type === "userMessage") {
+      messages.push({
+        type,
+        phase: item.phase ?? null,
+        text: clamp(extractText(item.content ?? item), 800),
+      });
+    }
+  }
+  return { count: list.length, counts, messages };
+}
+
+/**
+ * List a thread's turns, newest first.
+ * @param client - a started app-server client.
+ * @param params - `{ threadId, limit, itemsView, sortDirection }`.
+ * @returns compact turn records.
+ */
+export async function listTurns(client, params = {}) {
+  const result = await client.call("thread/turns/list", {
+    limit: 8,
+    sortDirection: "desc",
+    itemsView: "summary",
+    ...params,
+  });
+  return (result?.data ?? []).map((turn) => compactTurn(turn));
+}
+
+/**
+ * Read a thread's goal, or null when it has none.
+ *
+ * Verified shape (live app-server, 2026-10-13):
+ * `{ goal: { threadId, objective, status, tokenBudget, tokensUsed,
+ * timeUsedSeconds, createdAt, updatedAt } }`, and `{ goal: null }` for most
+ * threads. `tokenBudget` is null unless a budget was set.
+ *
+ * @param client - a started app-server client.
+ * @param threadId - the thread.
+ * @returns the compact goal, or null.
+ */
+export async function readGoal(client, threadId) {
+  const result = await client.call("thread/goal/get", { threadId });
+  const goal = result?.goal ?? null;
+  if (!goal || typeof goal !== "object") return null;
+  return {
+    threadId: goal.threadId ?? threadId,
+    objective: clamp(String(goal.objective ?? "").replace(/\s+/g, " ").trim(), 400),
+    status: goal.status ?? null,
+    tokenBudget: typeof goal.tokenBudget === "number" ? goal.tokenBudget : null,
+    tokensUsed: typeof goal.tokensUsed === "number" ? goal.tokensUsed : null,
+    timeUsedSeconds: typeof goal.timeUsedSeconds === "number" ? goal.timeUsedSeconds : null,
+    createdAt: epochToIso(goal.createdAt),
+    updatedAt: epochToIso(goal.updatedAt),
+  };
+}
+
+/**
  * Pick the thread a caller most likely means: explicit id, else newest for `cwd`, else newest overall.
  * @param client - a started app-server client.
  * @param options - `{ threadId, cwd }`.

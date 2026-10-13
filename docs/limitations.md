@@ -253,3 +253,64 @@ version document (`/@juyanjy/dsh-codex-bridge/0.1.0`) answered 200 immediately,
 but the packument (`/@juyanjy%2fdsh-codex-bridge`) and the tarball both answered
 404 for about another five minutes. A browser showing "Not Found" right after a
 successful publish is therefore a propagation window, not a failed publish.
+
+## 13. The board's colours rest on what the protocol actually reports
+
+Measured on the same machine (Codex CLI `0.155.0-alpha.9.2`), because a task board
+that guesses is worse than no board:
+
+- `thread/list` reports `status.type: "notLoaded"` for **every** thread this
+  connection has not loaded — which is every thread the user's app is driving. The
+  field describes the connection, not the thread, so no state is derived from it.
+- The strongest available signal is `thread/turns/list`, which reads the rollout
+  from disk and works for threads this connection does not own. Its newest turn
+  carries `status` and `completedAt`; a turn stopped mid-flight stays
+  `"interrupted"` with `completedAt: null`. Codex does not report a live foreign turn
+  as `inProgress` reliably enough to colour a whole column by it, so "Running" also
+  accepts this connection's own `turn/started`, and a rollout touched in the last 90
+  seconds — and that third case is printed on the card as `inferred`, not as fact.
+- `thread/read` on a thread this connection does not own returns the thread with
+  `turns: []`. The empty array is the connection's view, not the thread's history:
+  use `thread/turns/list` for turns.
+- Items carry almost no status: across 20 threads and 25 items each, only
+  `commandExecution`, `fileChange` and `mcpToolCall` had one (`completed`/`failed`).
+  Everything else has no status at all, so `failed` is reported where it exists and
+  silence is not read as success.
+- **No `plan` or `todoList` items existed anywhere in that sample** (170 reasoning,
+  99 commandExecution, 62 agentMessage, 51 contextCompaction, 40 mcpToolCall, 22
+  fileChange, 13 imageView, 13 userMessage, 11 imageGeneration, 3 webSearch, 2
+  subAgentActivity). Plan steps are therefore only shown when Codex really reports
+  them; a progress bar is drawn only from a denominator that exists (a goal's
+  `tokenBudget`, or plan steps). With no denominator the card shows real counts and
+  says so instead of inventing a percentage.
+- A goal is reported for very few threads (`thread/goal/get` answered `{goal: null}`
+  for 19 of 20), so "goal active but no turn running" is a strong signal when it
+  appears and simply absent otherwise.
+- Quota is a flag, not a percentage: `account/rateLimits/read` carries
+  `ordinaryUsageAllowed`, per-bucket `spendControlReached`, `rateLimitReachedType`
+  and `credits`, and the schema warns that clients must not infer recovery from
+  percentages or reset times. `codex_budget` and the board therefore report
+  "reached" only from those flags; 100% used is a level, not a refusal.
+
+## 14. The autopilot's blast radius is one queue, and it is capped
+
+The autopilot is the plugin's second write path (the first is `codex_send`), and it
+exists only behind an explicit click:
+
+- It writes through `thread/queue/add` only — the one path that works on a thread the
+  Codex app has open. It never calls `turn/start`, never resumes, and never answers an
+  approval.
+- It is off until armed, disarms itself after 30 minutes, and is memory-only: a
+  Harness restart returns it to off.
+- It skips a thread when an approval is pending, when the newest turn failed or asked
+  a question, when the queue is non-empty, when a turn moved within 90 seconds, when
+  it already sent for the same stuck turn, or when that thread has had 3
+  continuations (6 per run in total).
+- Two failed sends halt that thread permanently for the run (until disarmed and
+  re-armed), with the server's own error text kept on the halt record.
+- Every decision is appended to a bounded log (80 entries, last 40 shown) and printed
+  in the panel's strip. The guard rules live in `src/autopilot.js` and are unit
+  tested; the panel only renders what the host decided.
+- What it cannot do: tell whether a continuation was *useful*. It observes that the
+  thread stopped and that the queue was empty; it cannot see the desktop app's next
+  move, so a "sent" entry means "queued", not "worked".

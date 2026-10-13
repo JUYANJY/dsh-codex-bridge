@@ -36,49 +36,73 @@ function fixture(overrides = {}) {
       planType: "plus",
       limits: { primary: { usedPercent: 12, windowMins: 300 }, secondary: { usedPercent: 9 }, resetCreditsAvailable: 2 },
     },
+    quota: { level: "ok", line: "quota: ok · 12% of 300min · 9% weekly · 2 reset credits", text: "12% of 300min", reason: "", warnPct: 80 },
     columns: [
       {
-        id: "waiting-approval",
-        label: "Waiting for you",
-        hint: "a server request is open right now",
+        id: "needs-human",
+        label: "Needs you",
+        hint: "an approval this connection is holding",
         cards: [
           {
             threadId: "01aa-wait", shortId: "01aa-wait", title: "Approve the rebuild", ageMs: 61_000,
             preview: "rebuild the docs", cwd: "/tmp/demo", waitingCount: 1, queuedCount: 0,
-            turnStartedAt: "2026-10-10T09:50:00.000Z",
+            turnStartedAt: "2026-10-10T09:50:00.000Z", goal: null, turnStatus: "inProgress", turnItemCount: 4,
+            recentTurns: [], progress: { kind: "none", percent: null, label: "", detail: "", source: null, steps: [] },
+            state: "needs-human", stateBasis: "reported", stateLabel: "Needs you",
+            reasons: [{ code: "approval-pending", text: "This connection is holding 1 approval request.", severity: "attention", basis: "reported" }],
+            evidence: ["approval open on this thread", "1 queued message"],
             lastItem: { type: "commandExecution", text: "$ rm -rf build", turnId: "turn-1" },
-            lastItemStatus: "active",
+            lastItemStatus: "active", column: "needs-human",
           },
         ],
       },
       {
-        id: "unobserved",
-        label: "Not observed",
+        id: "no-activity",
+        label: "Nothing observed",
         hint: "not loaded by this connection",
         cards: [
           {
             threadId: "01aa-done", shortId: "01aa-done", title: "Finished earlier", ageMs: 3_600_000,
             preview: "summarise the log", cwd: "/tmp/demo", waitingCount: 0, queuedCount: 2,
-            turnStartedAt: null,
+            turnStartedAt: null, turnStatus: "interrupted", turnItemCount: 9,
+            goal: { objective: "finish every stage of the roadmap", status: "active", tokenBudget: null, tokensUsed: 1_070_878, timeUsedSeconds: 2720 },
+            recentTurns: [
+              { id: "turn-1", status: "completed", durationMs: 61_000 },
+              { id: "turn-2", status: "interrupted", durationMs: null },
+            ],
+            progress: { kind: "goal-budget", percent: 40, label: "40% of the goal's token budget", detail: "400 of 1000 tokens used", source: "goal-budget", steps: [] },
+            state: "blocked", stateBasis: "reported", stateLabel: "Blocked",
+            reasons: [{ code: "goal-stalled", text: "The goal is still active but no turn is running.", severity: "attention", basis: "reported" }],
+            evidence: ["goal active", "newest turn interrupted"],
             lastItem: { type: "agentMessage", text: "Done: 3 files changed.", turnId: "turn-2" },
-            lastItemStatus: "completed",
+            lastItemStatus: "completed", column: "blocked",
           },
           {
             threadId: "01aa-unread", shortId: "01aa-unread", title: "Never read", ageMs: null,
             preview: "old question", cwd: "/tmp/demo", waitingCount: 0, queuedCount: 0,
-            turnStartedAt: null, lastItem: null, lastItemStatus: null,
+            turnStartedAt: null, lastItem: null, lastItemStatus: null, goal: null, turnStatus: null, turnItemCount: null,
+            recentTurns: [], progress: null,
+            state: "no-activity", stateBasis: "reported", stateLabel: "Nothing observed",
+            reasons: [], evidence: [], column: "no-activity",
           },
         ],
       },
     ],
-    totals: { threads: 3, waiting: 1, running: 0, queued: 0, unobserved: 2, queuedMessages: 2 },
+    totals: { threads: 3, needsHuman: 1, blocked: 1, running: 0, noActivity: 1, queuedMessages: 2, waiting: 1 },
+    autopilot: {
+      armed: false, armedAt: null, expiresAt: null, remainingMs: null,
+      limits: { maxPerThread: 3, maxTotal: 6, minIntervalMs: 300_000, settleMs: 90_000 },
+      sent: [], total: 0, paused: [], halted: [], passes: 0, lastPassAt: null, log: [],
+    },
     probe: {
       generatedAt: "2026-10-10T09:56:24.283Z",
-      maxThreads: 12, maxQueueProbes: 6, maxItemProbes: 6,
+      maxThreads: 12, maxQueueProbes: 6, maxItemProbes: 6, maxTurnProbes: 12,
       threadsListed: 3, queueProbed: ["01aa-wait"], queueProbeErrors: [],
       queueUnprobedThreadIds: ["01aa-done", "01aa-unread"], queueCoverageComplete: false,
       itemProbed: ["01aa-wait", "01aa-done"], itemProbeErrors: [],
       itemUnprobedThreadIds: ["01aa-unread"], itemCoverageComplete: false,
+      turnProbed: ["01aa-wait", "01aa-done"], turnProbeErrors: [],
+      turnUnprobedThreadIds: ["01aa-unread"], turnCoverageComplete: false,
       notificationsRetained: 0,
     },
   };
@@ -90,7 +114,7 @@ function fixture(overrides = {}) {
  * @param replies - snapshot objects (or Errors) handed out one per read.
  * @returns `{ registrations, render, runEffects, reads }`.
  */
-function bootClient(replies) {
+function bootClient(replies, hooks = {}) {
   let definition = null;
   const fakeWindow = { __ModuleLoader__: { load: (value) => { definition = value; } } };
   const fakeDocument = {
@@ -132,6 +156,7 @@ function bootClient(replies) {
   });
 
   const reads = [];
+  const calls = [];
   const registrations = [];
   const ctx = {
     slots: {
@@ -141,9 +166,11 @@ function bootClient(replies) {
     get: (name) => (name === "connection"
       ? {
         rpc: {
-          call: async () => {
-            reads.push(Date.now());
-            const next = replies.shift();
+          call: async (carrier, channel, request) => {
+            reads.push(request?.method ?? "snapshot");
+            calls.push({ carrier, channel, method: request?.method, payload: request?.payload });
+            const scripted = typeof hooks.reply === "function" ? hooks.reply(request, calls.length - 1) : undefined;
+            const next = scripted !== undefined ? scripted : replies.shift();
             if (next instanceof Error) throw next;
             if (next === undefined) throw new Error("the test ran out of scripted replies");
             return next;
@@ -161,6 +188,7 @@ function bootClient(replies) {
   return {
     registrations,
     reads,
+    calls,
     render: () => { hook = 0; return page.component({}); },
     runEffects: () => { const pending = effects.splice(0); for (const effect of pending) effect(); },
   };
@@ -188,6 +216,11 @@ function elements(node, found = []) {
 /** @returns the elements whose className matches. */
 function byClass(tree, className) {
   return elements(tree).filter((el) => el.props.className === className);
+}
+
+/** @returns the elements carrying a class token (an element may carry several). */
+function withClass(tree, className) {
+  return elements(tree).filter((el) => String(el.props.className || "").split(/\s+/).includes(className));
 }
 
 /** @returns the badges, keyed by their `data-kind`. */
@@ -223,7 +256,7 @@ test("the first paint says it is reading, then the snapshot paints the columns",
   const tree = client.render();
 
   assert.deepEqual(byClass(tree, "dcb_count").map(textOf), ["1", "2"]);
-  assert.deepEqual(byClass(tree, "dcb_colName").map(textOf), ["Waiting for you", "Not observed"]);
+  assert.deepEqual(byClass(tree, "dcb_colName").map(textOf), ["Needs you", "Nothing observed"]);
   assert.deepEqual(byClass(tree, "dcb_id").map(textOf), ["01aa-wait", "01aa-done", "01aa-unread"]);
   assert.equal(client.reads.length, 1);
   assert.match(textOf(byClass(tree, "dcb_sub")[0]), /someone@example\.com · plus · 12% of 300min window · 9% weekly · 2 reset credits/);
@@ -254,11 +287,13 @@ test("the coverage notes follow the host's own flags, numbers included", async (
   assert.deepEqual(notes, [
     "Queue coverage is partial: 1 of 3 threads were probed (2 not), so the Queued column is a floor, not a total.",
     "Last-action coverage is partial: 2 of 3 threads were probed (1 not), so cards without a last line were simply not read.",
+    "Turn coverage is partial: 2 of 3 threads had their turns read (1 not), so a state may be missing its strongest evidence.",
   ]);
 
   const complete = fixture();
   complete.probe.queueCoverageComplete = true;
   complete.probe.itemCoverageComplete = true;
+  complete.probe.turnCoverageComplete = true;
   const quiet = bootClient([{ ok: true, value: complete }]);
   quiet.render();
   quiet.runEffects();
@@ -270,6 +305,7 @@ test("a panel loaded ahead of its host says less instead of throwing", async () 
   const older = fixture();
   delete older.probe.queueCoverageComplete;
   delete older.probe.itemCoverageComplete;
+  delete older.probe.turnCoverageComplete;
   delete older.probe.queueProbed;
   delete older.probe.itemProbed;
   for (const column of older.columns) for (const card of column.cards) delete card.lastItemStatus;
@@ -317,4 +353,140 @@ test("the icon glyph carries the panel entry marker", () => {
   assert.equal(glyph.props["data-dsh-panel-entry"], "dsh-codex-bridge");
   assert.equal(glyph.props.width, 16);
   assert.equal(icon({ size: 0, active: false }).props.width, 16);
+});
+
+test("a card's colour and chip are the host's state, with its basis", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  assert.deepEqual(byClass(tree, "dcb_card").map((card) => card.props["data-state"]), ["needs-human", "blocked", "no-activity"]);
+  assert.deepEqual(byClass(tree, "dcb_chip").map(textOf), ["Needs you", "Blocked", "Nothing observed"]);
+  assert.deepEqual(byClass(tree, "dcb_chip").map((chip) => chip.props["data-state"]), ["needs-human", "blocked", "no-activity"]);
+  assert.deepEqual(byClass(tree, "dcb_basis").map(textOf), ["reported", "reported", "reported"]);
+  // The header counts the same states the cards carry.
+  assert.match(textOf(byClass(tree, "dcb_sum")[0]), /^0 running · 1 blocked · 1 needs you · 1 nothing observed$/);
+  assert.deepEqual(byClass(tree, "dcb_reason").map(textOf), [
+    "This connection is holding 1 approval request.",
+    "The goal is still active but no turn is running.",
+  ]);
+  assert.match(textOf(byClass(tree, "dcb_goal")[0]), /^goal \(active\): finish every stage of the roadmap$/);
+});
+
+test("a bar appears only for a denominator the host reported", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  const fills = byClass(tree, "dcb_barFill");
+  assert.equal(fills.length, 1, "exactly one card carries a real denominator");
+  assert.equal(fills[0].props.style.width, "40%");
+  const notes = byClass(tree, "dcb_barNote").map(textOf);
+  assert.ok(notes.includes("40% of the goal's token budget"));
+  assert.ok(notes.includes("400 of 1000 tokens used · source: goal-budget"));
+  // The card with no denominator says so and shows the count it does have.
+  assert.ok(notes.includes("no progress denominator reported · newest turn has 4 recorded item(s)"));
+
+  const strip = byClass(tree, "dcb_strip");
+  assert.equal(strip.length, 1);
+  assert.deepEqual(byClass(strip[0], "dcb_dot").map((dot) => dot.props["data-state"]), ["completed", "interrupted"]);
+});
+
+test("the quota line is quoted, and a reached quota is a warning, never a guess", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.ok(byClass(client.render(), "dcb_autoBody").map(textOf).includes("quota: ok · 12% of 300min · 9% weekly · 2 reset credits"));
+
+  const reached = fixture();
+  reached.quota = { level: "reached", line: "quota: reached — rateLimitReachedType=primary", text: "rateLimitReachedType=primary", reason: "the server set a reached flag", warnPct: 80 };
+  const warned = bootClient([{ ok: true, value: reached }]);
+  warned.render();
+  warned.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const notes = byClass(warned.render(), "dcb_note").filter((note) => note.props["data-kind"] === "warn");
+  assert.equal(notes.length, 1);
+  assert.match(textOf(notes[0]), /Codex reports the account is out of quota: rateLimitReachedType=primary/);
+});
+
+test("the autopilot is off by default, and arming it asks the host", async () => {
+  const client = bootClient(
+    [{ ok: true, value: fixture() }],
+    { reply: (request) => (request.method === "snapshot" ? { ok: true, value: fixture() } : { ok: true, value: { status: { armed: true } } }) },
+  );
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+  assert.ok(byClass(tree, "dcb_autoBody").map(textOf).some((line) => line.startsWith("Off. Nothing in this panel writes to Codex while it is off")));
+  assert.deepEqual(byClass(tree, "dcb_tag").map(textOf).filter((label) => label === "off"), ["off"]);
+
+  const arm = withClass(tree, "dcb_btn").find((button) => textOf(button) === "Keep Codex moving for 30m");
+  assert.ok(arm, "the arm button never rendered");
+  await arm.props.onClick();
+  const setCall = client.calls.find((call) => call.method === "autopilot.set");
+  assert.deepEqual(setCall.payload, { armed: true, ttlMs: 30 * 60 * 1000, reason: "armed from the panel" });
+  assert.equal(client.calls.filter((call) => call.method === "snapshot").length, 2, "arming re-reads the snapshot");
+});
+
+test("an armed autopilot shows its deadline, its log and what it halted", async () => {
+  const armed = fixture();
+  armed.autopilot = {
+    ...armed.autopilot,
+    armed: true, armedAt: "2026-10-10T09:26:24.283Z", expiresAt: "2026-10-10T09:56:24.283Z", remainingMs: 1_800_000, total: 1, passes: 2,
+    paused: ["01aa-done"],
+    halted: [{ threadId: "01aa-unread", reason: "2 sends failed: thread already has an active writer", at: "2026-10-10T09:50:00.000Z" }],
+    log: [{ at: Date.parse("2026-10-10T09:50:00.000Z"), threadId: "01aa-done", action: "sent", code: null, text: "queued a continuation (1/3)" }],
+  };
+  const client = bootClient([{ ok: true, value: armed }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  assert.ok(byClass(tree, "dcb_tag").map(textOf).includes("armed for 30m"));
+  const lines = byClass(tree, "dcb_autoLine").map(textOf);
+  assert.ok(lines.some((line) => line.includes("01aa-unr · stopped: 2 sends failed: thread already has an active writer")));
+  assert.ok(lines.some((line) => line.includes("09:50:00Z") && line.includes("01aa-don · sent — queued a continuation (1/3)")));
+  assert.equal(byClass(tree, "dcb_autoLine")[0].props["data-kind"], "halt");
+  // A paused thread offers to resume, and the pause call names that one thread.
+  const buttons = withClass(tree, "dcb_btn");
+  const resume = buttons.find((button) => textOf(button) === "Resume this thread");
+  assert.ok(resume, "a paused thread should offer Resume");
+  await resume.props.onClick();
+  const pauseCall = client.calls.find((call) => call.method === "autopilot.pause");
+  assert.deepEqual(pauseCall.payload, { threadId: "01aa-done", paused: false });
+});
+
+test("the takeover brief renders the host's markdown and can be copied", async () => {
+  const markdown = "# Takeover brief\n\n## What Codex was asked to do\n> finish the roadmap\n";
+  const client = bootClient([], {
+    reply: (request) => {
+      if (request.method === "handoff") return { ok: true, value: { ok: true, threadId: "01aa-done", markdown, facts: {}, reason: "" } };
+      return { ok: true, value: fixture() };
+    },
+  });
+  const copied = [];
+  Object.defineProperty(globalThis, "navigator", { value: { clipboard: { writeText: async (text) => { copied.push(text); } } }, configurable: true });
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const briefButton = withClass(client.render(), "dcb_btn").find((button) => textOf(button) === "Takeover brief");
+  assert.ok(briefButton, "the brief button never rendered");
+  await briefButton.props.onClick();
+  const tree = client.render();
+  assert.equal(textOf(byClass(tree, "dcb_briefBody")[0]), markdown);
+  assert.deepEqual(client.calls.filter((call) => call.method === "handoff").map((call) => call.payload), [{ threadId: "01aa-wait" }]);
+
+  const copy = withClass(tree, "dcb_btn").find((button) => textOf(button) === "Copy");
+  await copy.props.onClick();
+  assert.deepEqual(copied, [markdown]);
+  assert.equal(textOf(withClass(client.render(), "dcb_btn").find((button) => textOf(button) === "Copied")), "Copied");
+  delete globalThis.navigator;
 });

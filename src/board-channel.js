@@ -16,6 +16,8 @@
  *
  * @module dsh-codex-bridge/board-channel
  */
+import { queueAutopilotMessage } from "./autopilot.js";
+import { collectHandoff } from "./handoff.js";
 import { collectBoard } from "./board.js";
 
 /** The channel segment the client asks for; the route is `/api/<channel>`. */
@@ -94,11 +96,41 @@ export function createRouteHandler(handlers, log = () => {}) {
  *
  * @param ctx - the host plugin context.
  * @param bridge - the shared bridge the snapshot reads through.
- * @param options - `{ maxThreads, maxQueueProbes, includeAccount, log }`.
+ * @param options - `{ maxThreads, maxQueueProbes, maxTurnProbes, includeAccount, autopilot, autopilotTimeoutMs, tickIntervalMs, log }`.
  * @returns `{ ok, path, reason? }`.
  */
 export function mountBoardChannel(ctx, bridge, options = {}) {
   const log = options.log ?? (() => {});
+  const autopilot = options.autopilot ?? null;
+  const autopilotTimeoutMs = options.autopilotTimeoutMs ?? 30_000;
+
+  const collectOptions = (payload = {}) => ({
+    maxThreads: payload?.maxThreads ?? options.maxThreads,
+    maxQueueProbes: payload?.maxQueueProbes ?? options.maxQueueProbes,
+    maxTurnProbes: payload?.maxTurnProbes ?? options.maxTurnProbes,
+    includeAccount: options.includeAccount,
+    warnPct: options.warnPct ?? payload?.warnPct,
+    autopilotHalted: autopilot ? [...autopilot.halted.entries()].map(([threadId, record]) => [threadId, record.reason ?? null]) : [],
+  });
+
+  const snapshot = async (payload = {}) => {
+    const client = await bridge.connection();
+    const board = await collectBoard(client, bridge, collectOptions(payload));
+    return { ...board, autopilot: autopilot ? autopilot.status() : null };
+  };
+
+  // The one place the plugin writes to Codex. It runs only while the autopilot
+  // is armed (the timer checks that), only through `thread/queue/add`, and every
+  // decision it makes is recorded on the autopilot for the panel to show.
+  const pass = async () => {
+    if (!autopilot) return null;
+    const client = await bridge.connection();
+    const board = await collectBoard(client, bridge, collectOptions({}));
+    return autopilot.runPass(board.cards, {
+      send: (card, message) => queueAutopilotMessage(client, card, message, { timeoutMs: autopilotTimeoutMs }),
+    });
+  };
+
   const register = () => {
     try {
       const connection = ctx.get?.("connection");
@@ -109,13 +141,38 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
       }
 
       const handlers = new Map([
-        ["snapshot", async (payload) => {
+        ["snapshot", (payload) => snapshot(payload)],
+        // Read-only: the same brief `codex_handoff` builds, so the panel can hand
+        // a person the takeover text without a second implementation of it.
+        ["handoff", async (payload = {}) => {
           const client = await bridge.connection();
-          return collectBoard(client, bridge, {
-            maxThreads: payload?.maxThreads ?? options.maxThreads,
-            maxQueueProbes: payload?.maxQueueProbes ?? options.maxQueueProbes,
-            includeAccount: options.includeAccount,
+          return collectHandoff(client, {
+            threadId: payload?.threadId,
+            cwd: payload?.cwd,
+            turns: payload?.turns,
+            items: payload?.items,
+            reason: payload?.reason,
+            warnPct: options.warnPct ?? payload?.warnPct,
+            timeoutMs: autopilotTimeoutMs,
           });
+        }],
+        ["autopilot.set", async (payload = {}) => {
+          if (!autopilot) throw new Error("this build carries no autopilot");
+          if (typeof payload?.armed !== "boolean") throw new Error("autopilot.set needs armed: true or false");
+          const now = Date.now();
+          const status = payload.armed ? autopilot.arm(payload, now) : autopilot.disarm(payload?.reason ?? "disarmed from the panel", now);
+          return { status };
+        }],
+        ["autopilot.pause", async (payload = {}) => {
+          if (!autopilot) throw new Error("this build carries no autopilot");
+          const threadId = String(payload?.threadId ?? "");
+          if (!threadId) throw new Error("autopilot.pause needs a threadId");
+          return { status: autopilot.setPaused(threadId, payload?.paused !== false) };
+        }],
+        ["autopilot.tick", async () => {
+          if (!autopilot) throw new Error("this build carries no autopilot");
+          const result = await pass();
+          return { result, status: autopilot.status() };
         }],
       ]);
 
@@ -126,8 +183,15 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
         fetch: createRouteHandler(handlers, log),
       });
 
+      // Only the instance that owns the route drives the timer, so a patch
+      // reload that yields to a live copy cannot send twice.
+      autopilot?.startTimer(pass, options.tickIntervalMs);
+
       try {
-        ctx.effect?.(() => () => { try { dispose?.(); } catch { /* already gone */ } }, `dsh-codex-bridge: ${RPC_ROUTE}`);
+        ctx.effect?.(() => () => {
+          autopilot?.stopTimer();
+          try { dispose?.(); } catch { /* already gone */ }
+        }, `dsh-codex-bridge: ${RPC_ROUTE}`);
       } catch { /* effect is optional */ }
 
       return { ok: true, path: RPC_ROUTE };

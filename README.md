@@ -28,36 +28,62 @@ exactly which parts are impossible rather than guessing.
 | `codex_send` | `queue` (default), `turn`, or `steer`. Falls back to the queue when the desktop app holds the thread's write lock. |
 | `codex_approvals` | Lists pending approval requests and answers them. |
 | `codex_queue` | Shows the messages still waiting on a thread (`action=list`), and cancels one with `action=delete`. Reports what the app-server confirmed, since a live session usually consumes a queued message first. |
+| `codex_budget` | Reads the rate-limit buckets and says whether Codex is out of quota, quoting the server's own flags. A high `usedPercent` is a level, not a limit, so 100% is not reported as "out of quota". |
+| `codex_ask` | One question on a throwaway Codex thread, with a chosen model and effort, then hands the answer back into a development thread verbatim (`feed:false` to only read it). It is the DSH↔Codex quick-chat path; a model override that Codex declines fails the call instead of quietly asking the default model. |
+| `codex_handoff` | Builds a takeover brief out of the thread's own records — the objective, the instruction quoted verbatim, what it touched, where it stopped, the quota at that moment, and what the brief cannot know. `saveTo` writes it to a file. |
 
 ## Board
 
 The same projection is also a panel inside Harness: a sidebar row named **Codex**
-opens a board whose columns are **waiting for approval**, **turn observed here**,
-**queued messages** and **no observed activity**.
+opens a board whose columns are **Needs you** (red), **Blocked** (orange),
+**Running** (green) and **Nothing observed** (grey), in that order — the four
+states live in `src/task-state.js`, one rule per state.
 
-It is deliberately **read-only**. The panel polls one host route (a single
-`snapshot` endpoint) and holds no path to `codex_send` or `codex_approvals` at all:
-a board that could decline an approval by accident would be worse than no board.
+Every judgement is made on the host, in pure functions, so the panel cannot invent
+a status the protocol never reported. Each card shows the state, whether it was
+`reported` or `inferred`, the reasons behind it, the evidence it rests on, the
+newest recorded turn statuses as a strip, and a progress bar **only when Codex
+reported a denominator** (a goal's token budget, or plan steps). With no
+denominator the card shows the counts it really has and says
+`no progress denominator reported` instead of drawing a bar from nothing.
 
-Four rules keep it honest, and they are why the columns are named the way they are:
+Five rules keep it honest:
 
-- A thread waiting on an approval is never filed under Queue, even when it also has
-  queued messages.
-- *Running* means **this bridge's connection saw `turn/started` and has not seen it
-  finish** — a statement about the connection, not about the machine. So the last
-  column is **no observed activity**, never "idle": silence from a
-  connection-scoped protocol is not proof that nothing is happening.
+- A thread holding an approval this connection is responsible for is **Needs you**,
+  and it is never filed under Blocked even when it also has queued messages.
+- *Running* means Codex reported the turn as advancing, **or** this bridge's
+  connection saw `turn/started` and has not seen it finish, **or** the rollout was
+  touched seconds ago — and that last case is printed as `inferred`. The fourth
+  column is **Nothing observed**, never "idle": silence from a connection-scoped
+  protocol is not proof that nothing is happening.
 - Every card carries a **last** line: the newest item the rollout reports that is not
-  encrypted reasoning (`reasoning` items trail almost every turn and their text is
-  sealed), with that item's own status printed verbatim — `inProgress`, `failed`,
-  whatever the protocol said. It reports what the thread last did; it is not a claim
-  that a turn is running.
-- Queue and last-action inspection are sampled (a bounded number of threads per
-  refresh, reported in the snapshot's `probe` block), and the board says so rather
-  than presenting a partial read as a total.
+  encrypted reasoning, with that item's own status printed verbatim. It reports what
+  the thread last did; it is not a claim that a turn is running.
+- Queue, item, turn and goal inspection are sampled (a bounded number of threads per
+  refresh, all of it reported in the snapshot's `probe` block), and the board says so
+  rather than presenting a partial read as a total.
+- The account line and the quota line come from the same predicate as
+  `codex_budget`, and a reached quota is a warning that quotes the server's flag.
+
+The panel has exactly three controls. Two only read: **Refresh**, and **Takeover
+brief**, which renders the same markdown `codex_handoff` builds, with a Copy
+button. The third is the one write path:
+
+**Keep Codex moving for 30m** arms the autopilot. While armed, and only then, a
+host-side timer may queue a continuation message into a thread that is Blocked or
+Needs-you, through `thread/queue/add` — the same single write `codex_send` uses.
+It skips a thread when an approval is pending, when the newest turn failed or asked
+a question, when the thread's queue is not empty, when a turn moved less than 90
+seconds ago, when it already sent to the same stuck turn, or when that thread has
+reached 3 continuations or the run has reached 6. Two failed sends halt that thread
+and the strip says so. Arming expires on its own after 30 minutes, `Stop keeping it
+moving` ends it immediately, and every decision — sent, skipped, halted, with the
+message it sent — is listed in the strip. It never answers an approval: a person
+still does that.
 
 The client half is plain JS loaded by the web client — no build step, like the
-shipped client plugins. It shows up after a Harness restart.
+shipped client plugins, and it is re-read from disk on page load. The host half is
+imported at startup, so host changes need a Harness restart.
 
 ## What you cannot do, and why
 
@@ -77,8 +103,10 @@ Four of these are **structural**, not missing features — full evidence in
    `(reasoning not exposed: encrypted)` when there is none — not the hidden chain
    of thought.
 
-Also: `codex_send` is a **real write**. A queued message is picked up promptly — in
-testing, almost immediately — so queueing is sending, not drafting.
+Also: `codex_send` is a **real write**, and the board's autopilot is a second, much
+narrower one (queue only, armed by a click, capped, expiring, and logged). A queued
+message is picked up promptly — in testing, almost immediately — so queueing is
+sending, not drafting.
 `codex_queue action=delete` can cancel an entry that is still waiting, but that is
 a race rather than an undo: the tool reports the app-server's own answer instead of
 assuming the message never went out.
@@ -186,7 +214,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 79 unit tests, no Codex install required
+npm test            # 160 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
@@ -204,9 +232,11 @@ thread.
 
 `tests/client.test.js` renders the panel's React tree in the test process against
 a snapshot the host route would really serve, using a minimal React stand-in
-(no DOM, no browser). It covers the fields the panel reads, the coverage notes,
-the badge rules and the failure path. It does not cover the shell mounting the
-two seats, or anything visual — check those by eye.
+(no DOM, no browser). It covers the seats, the four state columns, the chip and
+its basis, the progress bar (present only with a real denominator), the quota
+line and its warning, the autopilot strip (off by default, arming, log, halt,
+per-thread pause), the takeover brief and the failure path. It does not cover the
+shell mounting the two seats, or anything visual — check those by eye.
 
 ### Layout
 
@@ -217,8 +247,12 @@ src/app-server.js     spawn, JSONL framing, request correlation, inbound request
 src/codex.js          protocol payloads -> compact records
 src/notifications.js  which notification methods matter, and how to describe them
 src/errors.js         the active-writer error and the explanation shown to users
-src/board.js          the read-only projection the tools and the board share
-src/board-channel.js  the host route the panel polls (one POST endpoint)
+src/board.js          the projection the tools and the board share
+src/task-state.js     the four states, the reasons behind them, and the progress rules
+src/autopilot.js      the opt-in queue-only continuation policy, and its log
+src/quota.js          the one "is Codex out of quota" predicate
+src/handoff.js        the takeover brief, built from a thread's own records
+src/board-channel.js  the host route the panel calls (snapshot, autopilot, handoff)
 src/client.js         the panel itself; loaded by the web client, never by Node
 src/tools/*.js        one factory per tool
 ```

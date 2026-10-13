@@ -375,7 +375,13 @@ test("every tool renders its own output without throwing", async () => {
   for (const tool of allTools(stubBridge(client), {})) {
     const args = tool.name === "codex_send"
       ? { message: "hi", threadId: "T1" }
-      : (tool.name === "codex_watch" ? { threadId: "T1", seconds: 1 } : { threadId: "T1" });
+      : tool.name === "codex_watch"
+        ? { threadId: "T1", seconds: 1 }
+        : tool.name === "codex_ask"
+          // Asking reaches thread/start, which this stub does not answer, so the
+          // tool reports that failure and still renders — the point of this test.
+          ? { question: "what next?", feed: false }
+          : { threadId: "T1" };
     const value = await tool.execute(args);
     const blocks = tool.output.render(args, value);
     assert.ok(Array.isArray(blocks) && blocks.length > 0, `${tool.name} rendered nothing`);

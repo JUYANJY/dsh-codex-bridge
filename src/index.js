@@ -13,6 +13,7 @@
  * @module dsh-codex-bridge
  */
 import z from "@deepseek-ai/schemastery";
+import { Autopilot } from "./autopilot.js";
 import { mountBoardChannel } from "./board-channel.js";
 import { CodexBridge } from "./bridge.js";
 import { allTools } from "./tools/index.js";
@@ -29,6 +30,14 @@ export const Config = z.object({
   binary: z.string().default(""),
   /** Milliseconds to wait for one app-server response. */
   requestTimeoutMs: z.number().default(30000),
+  /** Model `codex_ask` requests for a direction question; empty uses the account default. */
+  consultModel: z.string().default(""),
+  /** Reasoning effort `codex_ask` asks for. */
+  consultEffort: z.string().default("max"),
+  /** How long `codex_ask` waits for the answer before giving up. */
+  answerTimeoutMs: z.number().default(180000),
+  /** Percentage at which the quota becomes an advisory warning (never a limit). */
+  warnPct: z.number().default(80),
 });
 
 /**
@@ -52,10 +61,22 @@ function reportChannelIssue(level, message) {
  */
 export function apply(ctx, config = {}) {
   const bridge = new CodexBridge(config);
-  const tools = allTools(bridge, { timeoutMs: config.requestTimeoutMs ?? 30000 });
+  const tools = allTools(bridge, {
+    timeoutMs: config.requestTimeoutMs ?? 30000,
+    consultModel: config.consultModel ?? "",
+    consultEffort: config.consultEffort ?? "max",
+    answerTimeoutMs: config.answerTimeoutMs ?? 180000,
+    warnPct: config.warnPct ?? 80,
+  });
+  // The panel can arm this, and only the panel can: it starts disarmed, and
+  // arming it is a visible, bounded, cancellable action.
+  const autopilot = new Autopilot();
 
   try {
-    ctx.on?.("dispose", () => bridge.dispose());
+    ctx.on?.("dispose", () => {
+      autopilot.stopTimer();
+      bridge.dispose();
+    });
   } catch {
     /* older contexts may not expose lifecycle events */
   }
@@ -63,7 +84,13 @@ export function apply(ctx, config = {}) {
   for (const tool of tools) ctx.tools.register(tool);
 
   try {
-    mountBoardChannel(ctx, bridge, { log: reportChannelIssue });
+    mountBoardChannel(ctx, bridge, {
+      autopilot,
+      autopilotTimeoutMs: config.requestTimeoutMs ?? 30000,
+      warnPct: config.warnPct ?? 80,
+      warnPct: config.warnPct,
+      log: reportChannelIssue,
+    });
   } catch (error) {
     reportChannelIssue("error", `board channel not mounted: ${String(error?.message ?? error)}`);
   }
@@ -72,6 +99,10 @@ export function apply(ctx, config = {}) {
 export { ACTIVE_WRITER, ACTIVE_WRITER_HINT, isActiveWriterError } from "./errors.js";
 export { CodexAppServer, newClientMessageId, resolveCodexBin } from "./app-server.js";
 export { clamp, compactLimits, extractText, listCodexProcesses, listItems, listThreads, readAccountState, renderItem, resolveThreadId } from "./codex.js";
-export { BOARD_COLUMNS, buildBoard, collectBoard, observeTurnState } from "./board.js";
+export { BOARD_COLUMNS, DEFAULT_MAX_TURN_PROBES, buildBoard, collectBoard, observeTurnState } from "./board.js";
+export { AUTOPILOT_DEFAULTS, Autopilot, continueMessage, decideAutoContinue, queueAutopilotMessage, stuckFingerprint } from "./autopilot.js";
+export { TASK_STATES, STATE_LABELS, deriveTaskState } from "./task-state.js";
+export { BUDGET_LEVELS, DEFAULT_WARN_PCT, budgetFromLimits, budgetLine, readBudget } from "./quota.js";
+export { HANDOFF_ITEMS, HANDOFF_TURNS, buildHandoff, collectHandoff } from "./handoff.js";
 export { RPC_CHANNEL, RPC_ROUTE, createRouteHandler, mountBoardChannel } from "./board-channel.js";
 export { TOOL_NAMES } from "./tools/index.js";

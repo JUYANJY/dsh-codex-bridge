@@ -9,18 +9,29 @@
  *  - the last column is "no observed activity", never "idle": a notification
  *    only reaches the connection that owns the turn (docs/limitations.md), so
  *    silence in this process proves nothing about the thread;
- *  - a turn is reported as running only when *this* connection saw it start and
- *    has not seen it finish;
+ *  - a card's colour comes from `task-state.js`, which names the rule behind
+ *    every state and marks each reason `reported` or `inferred`;
+ *  - a turn counts as running only when Codex reports it that way, when *this*
+ *    connection saw it start, or when the rollout was touched seconds ago —
+ *    and the third case is labelled `inferred` on the card;
  *  - approval counts cover only the server requests this process is holding;
- *  - queue counts are only as complete as the probes that actually ran, and the
- *    snapshot carries that coverage with it;
+ *  - queue, item, turn and goal coverage is only as complete as the probes that
+ *    actually ran, and the snapshot carries that coverage with it;
  *  - a card's "last" line is the newest item the rollout reports that is not
  *    encrypted reasoning, and its status is printed verbatim: neither is turned
- *    into a claim about the turn.
+ *    into a claim about the turn;
+ *  - a progress bar appears only when Codex reported a denominator (a plan's
+ *    steps, or a goal's token budget). Otherwise the card shows counts.
  *
  * @module dsh-codex-bridge/board
  */
-import { clamp, compactLimits, listThreads, readAccountState, renderItem } from "./codex.js";
+import {
+  clamp, compactLimits, listThreads, listTurns, readAccountState, readGoal, renderItem,
+} from "./codex.js";
+import {
+  STATE_HINTS, STATE_LABELS, TASK_STATES, deriveTaskState, planFromNotifications, progressOf, turnStrip,
+} from "./task-state.js";
+import { budgetFromLimits } from "./quota.js";
 
 /** How many recent threads one snapshot looks at. */
 export const DEFAULT_MAX_THREADS = 12;
@@ -31,11 +42,24 @@ export const DEFAULT_MAX_QUEUE_PROBES = 6;
 /** How many of those threads get a `thread/items/list` probe for their last action. */
 export const DEFAULT_MAX_ITEM_PROBES = 6;
 
+/**
+ * How many threads get a turn probe (`thread/turns/list`) and a goal probe
+ * (`thread/goal/get`).
+ *
+ * Turns decide the task state, so the default covers the whole listing rather
+ * than an arbitrary subset; both calls read local rollout state and answer in
+ * milliseconds.
+ */
+export const DEFAULT_MAX_TURN_PROBES = 12;
+
 /** How many recent items one probe reads: enough to look past the trailing reasoning items. */
 export const ITEM_PROBE_LIMIT = 3;
 
 /** How much of an item's text reaches a card label. */
 export const LAST_ITEM_CHARS = 180;
+
+/** How many turns `thread/turns/list` reads per thread: enough for the turn strip. */
+export const TURN_PROBE_LIMIT = 8;
 
 /**
  * Item types the card label skips.
@@ -46,33 +70,11 @@ export const LAST_ITEM_CHARS = 180;
 const UNLABELED_ITEM_TYPES = new Set(["reasoning"]);
 
 /**
- * Board columns, in display order.
- *
- * A card lands in the first column whose question it answers "yes" to, so a
- * thread waiting for an approval is never hidden behind a queue entry.
+ * Board columns, in display order: one column per task state, so a reader sees
+ * "needs you / blocked / running / nothing observed" instead of a queue listing
+ * with a status hidden inside it.
  */
-export const BOARD_COLUMNS = [
-  {
-    id: "waiting-approval",
-    label: "Waiting for approval",
-    hint: "An inbound server request this connection is holding and Codex is waiting on.",
-  },
-  {
-    id: "running",
-    label: "Turn observed here",
-    hint: "This connection saw turn/started and has not seen it finish. Turns the desktop app runs are not visible here.",
-  },
-  {
-    id: "queued",
-    label: "Queued messages",
-    hint: "thread/queue/list answered with at least one waiting submission.",
-  },
-  {
-    id: "unobserved",
-    label: "No observed activity",
-    hint: "Not proof of idleness — this connection only hears about turns it owns. Check the thread to know.",
-  },
-];
+export const BOARD_COLUMNS = TASK_STATES.map((id) => ({ id, label: STATE_LABELS[id], hint: STATE_HINTS[id] }));
 
 /** Notification methods that end a turn. */
 const TURN_END_METHODS = new Set(["turn/completed", "turn/failed", "turn/cancelled", "turn/interrupted"]);
@@ -133,8 +135,8 @@ function byRecency(a, b) {
 
 /**
  * Build the board from already-collected facts. Pure.
- * @param input - `{ threads, queues, items, approvals, turns, now }`.
- * @returns `{ generatedAt, columns, totals, unattachedApprovals }`.
+ * @param input - `{ threads, queues, items, approvals, turns, turnLists, goals, plans, autopilotHalted, now }`.
+ * @returns `{ generatedAt, columns, cards, totals, unattachedApprovals }`.
  */
 export function buildBoard(input = {}) {
   const now = Number.isFinite(input.now) ? input.now : Date.now();
@@ -142,7 +144,13 @@ export function buildBoard(input = {}) {
   const queues = input.queues ?? {};
   const items = input.items ?? {};
   const approvals = Array.isArray(input.approvals) ? input.approvals : [];
-  const turns = input.turns instanceof Map ? input.turns : new Map();
+  const observed = input.turns instanceof Map ? input.turns : new Map();
+  const turnLists = input.turnLists ?? {};
+  const goals = input.goals ?? {};
+  const plans = input.plans ?? {};
+  const halted = input.autopilotHalted instanceof Map
+    ? input.autopilotHalted
+    : new Map(Array.isArray(input.autopilotHalted) ? input.autopilotHalted : []);
 
   const waitingByThread = new Map();
   const knownThreadIds = new Set(threads.map((thread) => thread.id));
@@ -161,16 +169,33 @@ export function buildBoard(input = {}) {
   }
 
   const cards = threads.map((thread) => {
-    const queued = Array.isArray(queues[thread.id]) ? queues[thread.id] : [];
-    const waitingCount = waitingByThread.get(thread.id) ?? 0;
-    const turn = turns.get(thread.id) ?? null;
-    const probed = items[thread.id] ?? null;
-    const column = waitingCount > 0
-      ? "waiting-approval"
-      : (turn ? "running" : (queued.length > 0 ? "queued" : "unobserved"));
+    const threadId = thread.id;
+    const queued = Array.isArray(queues[threadId]) ? queues[threadId] : [];
+    const waitingCount = waitingByThread.get(threadId) ?? 0;
+    const observedTurn = observed.get(threadId) ?? null;
+    const turns = Array.isArray(turnLists[threadId]) ? turnLists[threadId] : [];
+    const newestTurn = turns[0] ?? null;
+    const goal = goals[threadId] ?? null;
+    const probed = items[threadId] ?? null;
+    const halt = halted.get(threadId) ?? null;
+    // Halted threads arrive either as `threadId -> reason` pairs (the channel) or
+    // as a Map of records (a caller holding the autopilot itself).
+    const haltReason = typeof halt === "string" ? halt : halt?.reason ?? null;
+    const { state, basis, reasons, evidence } = deriveTaskState({
+      thread,
+      queue: queued,
+      item: probed,
+      waitingCount,
+      turn: newestTurn,
+      goal,
+      observedTurn,
+      now,
+      autopilotStopped: haltReason,
+    });
+
     return {
-      threadId: thread.id,
-      shortId: String(thread.id ?? "").slice(0, 8),
+      threadId,
+      shortId: String(threadId ?? "").slice(0, 8),
       title: thread.title ?? null,
       preview: thread.preview ?? "",
       cwd: thread.cwd ?? null,
@@ -178,7 +203,31 @@ export function buildBoard(input = {}) {
       ageMs: ageOf(thread.updatedAt, now),
       queuedCount: queued.length,
       waitingCount,
-      turnStartedAt: turn ? new Date(turn.at).toISOString() : null,
+      turnStartedAt: observedTurn ? new Date(observedTurn.at).toISOString() : null,
+      goal: goal
+        ? {
+          objective: goal.objective ?? "",
+          status: goal.status ?? null,
+          tokenBudget: goal.tokenBudget ?? null,
+          tokensUsed: goal.tokensUsed ?? null,
+          timeUsedSeconds: goal.timeUsedSeconds ?? null,
+        }
+        : null,
+      lastTurnId: newestTurn?.id ?? null,
+      turnStatus: newestTurn?.status ?? null,
+      turnError: newestTurn?.error ?? null,
+      turnStartedAtReported: newestTurn?.startedAt ?? null,
+      turnCompletedAt: newestTurn?.completedAt ?? null,
+      turnDurationMs: newestTurn?.durationMs ?? null,
+      turnItemCount: newestTurn?.items?.count ?? null,
+      turnItemCounts: newestTurn?.items?.counts ?? null,
+      recentTurns: turnStrip(turns, 8),
+      progress: progressOf({ plan: plans[threadId] ?? null, goal, turn: newestTurn }),
+      state,
+      stateBasis: basis,
+      reasons,
+      evidence,
+      autopilotStopped: haltReason,
       lastItem: probed?.last
         ? {
           type: probed.last.type ?? null,
@@ -187,7 +236,7 @@ export function buildBoard(input = {}) {
         }
         : null,
       lastItemStatus: probed?.status ?? null,
-      column,
+      column: state,
     };
   });
 
@@ -198,18 +247,20 @@ export function buildBoard(input = {}) {
     cards: cards.filter((card) => card.column === definition.id).sort(byRecency),
   }));
 
-  const totals = { threads: cards.length, waiting: 0, running: 0, queued: 0, unobserved: 0 };
+  const totals = { threads: cards.length, needsHuman: 0, blocked: 0, running: 0, noActivity: 0, queuedMessages: 0, waiting: 0 };
   for (const card of cards) {
+    if (card.state === "needs-human") totals.needsHuman += 1;
+    else if (card.state === "blocked") totals.blocked += 1;
+    else if (card.state === "running") totals.running += 1;
+    else totals.noActivity += 1;
     if (card.waitingCount > 0) totals.waiting += 1;
-    else if (card.column === "running") totals.running += 1;
-    else if (card.queuedCount > 0) totals.queued += 1;
-    else totals.unobserved += 1;
   }
   totals.queuedMessages = cards.reduce((sum, card) => sum + card.queuedCount, 0);
 
   return {
     generatedAt: new Date(now).toISOString(),
     columns,
+    cards,
     totals,
     unattachedApprovals,
   };
@@ -219,19 +270,23 @@ export function buildBoard(input = {}) {
  * Ask the app-server for one board snapshot.
  *
  * Read-only by construction: `thread/list`, `thread/items/list`,
- * `thread/queue/list`, `account/read` and `account/rateLimits/read` are all
- * reads, and the only other input is the in-process notification buffer.
+ * `thread/queue/list`, `thread/turns/list`, `thread/goal/get`, `account/read`
+ * and `account/rateLimits/read` are all reads, and the only other inputs are
+ * the in-process notification buffer and the autopilot's own counters.
  *
  * @param client - a started app-server client.
  * @param bridge - the shared bridge (for the retained notification stream).
- * @param options - `{ maxThreads, maxQueueProbes, maxItemProbes, includeAccount }`.
+ * @param options - `{ maxThreads, maxQueueProbes, maxItemProbes, maxTurnProbes, includeAccount, autopilotHalted, now }`.
  * @returns the board plus a `probe` block saying what was and was not looked at.
  */
 export async function collectBoard(client, bridge = null, options = {}) {
   const maxThreads = options.maxThreads ?? DEFAULT_MAX_THREADS;
   const maxQueueProbes = Math.min(options.maxQueueProbes ?? DEFAULT_MAX_QUEUE_PROBES, maxThreads);
   const maxItemProbes = Math.min(options.maxItemProbes ?? DEFAULT_MAX_ITEM_PROBES, maxThreads);
+  const maxTurnProbes = Math.min(options.maxTurnProbes ?? DEFAULT_MAX_TURN_PROBES, maxThreads);
   const includeAccount = options.includeAccount !== false;
+  const warnPct = options.warnPct;
+  const notifications = bridge?.recentNotifications ?? [];
 
   const threads = await listThreads(client, { limit: maxThreads });
 
@@ -277,40 +332,104 @@ export async function collectBoard(client, bridge = null, options = {}) {
     }
   }));
 
+  // Turns decide each card's state, and goals say whether a stopped task is
+  // still supposed to be running. Both are separate round trips, so they fail
+  // separately: a Codex build without `thread/goal/get` still yields a board.
+  const turnLists = {};
+  const goals = {};
+  const turnProbed = [];
+  const turnProbeErrors = [];
+  const goalProbed = [];
+  const goalProbeErrors = [];
+  await Promise.all(threads.slice(0, maxTurnProbes).map(async (thread) => {
+    const threadId = thread.id;
+    try {
+      turnLists[threadId] = await listTurns(client, { threadId, limit: TURN_PROBE_LIMIT });
+      turnProbed.push(threadId);
+    } catch (error) {
+      turnLists[threadId] = [];
+      turnProbeErrors.push({ threadId, message: String(error?.message ?? error) });
+    }
+    try {
+      goals[threadId] = await readGoal(client, threadId);
+      goalProbed.push(threadId);
+    } catch (error) {
+      goals[threadId] = null;
+      goalProbeErrors.push({ threadId, message: String(error?.message ?? error) });
+    }
+  }));
+
+  const plans = {};
+  let plansFromNotifications = 0;
+  for (const thread of threads.slice(0, maxTurnProbes)) {
+    const plan = planFromNotifications(notifications, thread.id);
+    if (plan) {
+      plans[thread.id] = plan;
+      plansFromNotifications += 1;
+    }
+  }
+
   const approvals = (client.pendingServerRequests?.() ?? []).map((request) => ({
     id: request?.id ?? null,
     method: request?.method ?? null,
     threadId: threadIdOf(request?.params),
   }));
 
-  const turns = observeTurnState(bridge?.recentNotifications ?? []);
-  const board = buildBoard({ threads, queues, items, approvals, turns });
+  const turns = observeTurnState(notifications);
+  const board = buildBoard({
+    threads,
+    queues,
+    items,
+    approvals,
+    turns,
+    turnLists,
+    goals,
+    plans,
+    autopilotHalted: options.autopilotHalted,
+    now: options.now,
+  });
 
   let account = null;
+  // The raw `account/rateLimits/read` answer, kept so the panel's budget line and
+  // the `codex_budget` tool come from one predicate rather than two.
+  let rawLimits = null;
+  let accountError = null;
   if (includeAccount) {
     try {
       const state = await readAccountState(client);
+      rawLimits = state.limits;
+      accountError = state.account?.error ?? null;
       account = {
         email: state.account?.account?.email ?? state.account?.email ?? null,
         planType: compactLimits(state.limits)?.planType ?? null,
         limits: compactLimits(state.limits),
-        error: state.account?.error ?? null,
+        error: accountError,
       };
     } catch (error) {
-      account = { email: null, planType: null, limits: null, error: String(error?.message ?? error) };
+      accountError = String(error?.message ?? error);
+      account = { email: null, planType: null, limits: null, error: accountError };
     }
   }
 
+  const referenceNow = Number.isFinite(options.now) ? options.now : Date.now();
+  const quota = includeAccount
+    ? budgetFromLimits(rawLimits ? { ...rawLimits } : { error: accountError ?? "the account read returned nothing" }, { warnPct, now: referenceNow })
+    : null;
+
   const unprobed = threads.filter((thread) => !probed.includes(thread.id) && !probeErrors.some((entry) => entry.threadId === thread.id));
   const itemUnprobed = threads.filter((thread) => !itemProbed.includes(thread.id) && !itemProbeErrors.some((entry) => entry.threadId === thread.id));
+  const turnUnprobed = threads.filter((thread) => !turnProbed.includes(thread.id) && !turnProbeErrors.some((entry) => entry.threadId === thread.id));
+  const goalUnprobed = threads.filter((thread) => !goalProbed.includes(thread.id) && !goalProbeErrors.some((entry) => entry.threadId === thread.id));
 
   return {
     ...board,
     account,
+    quota,
     probe: {
       maxThreads,
       maxQueueProbes,
       maxItemProbes,
+      maxTurnProbes,
       threadsListed: threads.length,
       queueProbed: probed,
       queueProbeErrors: probeErrors,
@@ -320,7 +439,16 @@ export async function collectBoard(client, bridge = null, options = {}) {
       itemProbeErrors,
       itemUnprobedThreadIds: itemUnprobed.map((thread) => thread.id),
       itemCoverageComplete: itemUnprobed.length === 0 && itemProbeErrors.length === 0,
-      notificationsRetained: (bridge?.recentNotifications ?? []).length,
+      turnProbed,
+      turnProbeErrors,
+      turnUnprobedThreadIds: turnUnprobed.map((thread) => thread.id),
+      turnCoverageComplete: turnUnprobed.length === 0 && turnProbeErrors.length === 0,
+      goalProbed,
+      goalProbeErrors,
+      goalUnprobedThreadIds: goalUnprobed.map((thread) => thread.id),
+      goalCoverageComplete: goalUnprobed.length === 0 && goalProbeErrors.length === 0,
+      plansFromNotifications,
+      notificationsRetained: notifications.length,
     },
   };
 }

@@ -37,10 +37,11 @@ const THREAD = (id, seconds) => ({ id, title: `thread ${id}`, preview: `preview 
 
 test("the last column refuses to call silence idle", () => {
   const last = BOARD_COLUMNS.at(-1);
-  assert.equal(last.id, "unobserved");
-  assert.match(last.label, /no observed activity/i);
+  assert.equal(last.id, "no-activity");
+  assert.match(last.label, /nothing observed/i);
   assert.match(last.hint, /not proof of idleness/i);
   for (const column of BOARD_COLUMNS) assert.doesNotMatch(column.label, /idle/i);
+  assert.deepEqual(BOARD_COLUMNS.map((column) => column.id), ["needs-human", "blocked", "running", "no-activity"]);
 });
 
 test("a thread waiting on approval is never hidden behind its queue", () => {
@@ -50,14 +51,16 @@ test("a thread waiting on approval is never hidden behind its queue", () => {
     queues: { T1: [{ id: "q1" }] },
     approvals: [{ id: 9, method: "item/commandExecution/requestApproval", threadId: "T1" }],
   });
-  const [waiting, running, queued] = board.columns;
-  assert.equal(waiting.cards.length, 1);
-  assert.equal(waiting.cards[0].threadId, "T1");
-  assert.equal(waiting.cards[0].waitingCount, 1);
-  assert.equal(waiting.cards[0].queuedCount, 1);
+  const [needsHuman, blocked, running] = board.columns;
+  assert.equal(needsHuman.cards.length, 1);
+  assert.equal(needsHuman.cards[0].threadId, "T1");
+  assert.equal(needsHuman.cards[0].waitingCount, 1);
+  assert.equal(needsHuman.cards[0].queuedCount, 1, "the queue is still visible on the card, just not in charge of its colour");
+  assert.equal(needsHuman.cards[0].state, "needs-human");
+  assert.equal(needsHuman.cards[0].reasons.some((reason) => reason.code === "approval"), true);
+  assert.equal(blocked.cards.length, 0);
   assert.equal(running.cards.length, 0);
-  assert.equal(queued.cards.length, 0, "a queued card must not also appear under Queued");
-  assert.deepEqual(board.totals, { threads: 1, waiting: 1, running: 0, queued: 0, unobserved: 0, queuedMessages: 1 });
+  assert.deepEqual(board.totals, { threads: 1, needsHuman: 1, blocked: 0, running: 0, noActivity: 0, queuedMessages: 1, waiting: 1 });
 });
 
 test("a turn counts as running only while this connection has not seen it finish", () => {
@@ -67,7 +70,7 @@ test("a turn counts as running only while this connection has not seen it finish
     turns: new Map([["T1", { at: 500_000, turnId: "turn-1" }]]),
   });
   assert.deepEqual(board.columns.find((column) => column.id === "running").cards.map((card) => card.threadId), ["T1"]);
-  assert.deepEqual(board.columns.find((column) => column.id === "unobserved").cards.map((card) => card.threadId), ["T2"]);
+  assert.deepEqual(board.columns.find((column) => column.id === "no-activity").cards.map((card) => card.threadId), ["T2"]);
 });
 
 test("observeTurnState folds started against finished, in order", () => {
@@ -90,7 +93,7 @@ test("an approval on a thread that is not listed is reported, not dropped", () =
   });
   assert.equal(board.unattachedApprovals.length, 2);
   assert.equal(board.totals.waiting, 0);
-  assert.equal(board.columns.find((column) => column.id === "unobserved").cards.length, 1);
+  assert.equal(board.columns.find((column) => column.id === "no-activity").cards.length, 1);
 });
 
 test("buildBoard answers an empty world with four empty columns", () => {
@@ -112,20 +115,31 @@ test("collectBoard says which threads it did not probe", async () => {
     }),
     "thread/queue/list": (params) => ({ data: params.threadId === "T1" ? [{ id: "q1" }] : [] }),
     "thread/items/list": () => ({ data: [] }),
+    "thread/turns/list": () => ({ data: [] }),
+    "thread/goal/get": () => ({ goal: null }),
     "account/read": () => ({ account: { email: "someone@example.com" } }),
     "account/rateLimits/read": () => ({ rateLimits: { planType: "plus", primary: { usedPercent: 12, windowDurationMins: 300 } } }),
   });
 
-  const partial = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 3, maxQueueProbes: 1 });
+  const partial = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 3, maxQueueProbes: 1, maxTurnProbes: 1 });
   assert.deepEqual(partial.probe.queueProbed, ["T1"]);
   assert.deepEqual(partial.probe.queueUnprobedThreadIds, ["T2", "T3"]);
   assert.equal(partial.probe.queueCoverageComplete, false);
   assert.equal(partial.account.email, "someone@example.com");
-  assert.equal(partial.columns.find((column) => column.id === "queued").cards.length, 1);
+  assert.deepEqual(partial.probe.turnProbed, ["T1"]);
+  assert.deepEqual(partial.probe.turnUnprobedThreadIds, ["T2", "T3"]);
+  assert.equal(partial.probe.turnCoverageComplete, false);
+  assert.equal(partial.probe.goalCoverageComplete, false);
+  // T1's queue makes it blocked; the other two reported nothing at all.
+  const blocked = partial.columns.find((column) => column.id === "blocked");
+  assert.deepEqual(blocked.cards.map((card) => card.threadId), ["T1"]);
+  assert.equal(blocked.cards[0].reasons[0].code, "queue-waiting");
 
-  const full = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 3, maxQueueProbes: 3 });
+  const full = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 3, maxQueueProbes: 3, maxTurnProbes: 3 });
   assert.equal(full.probe.queueCoverageComplete, true);
   assert.equal(full.probe.queueProbeErrors.length, 0);
+  assert.equal(full.probe.turnCoverageComplete, true);
+  assert.equal(full.probe.goalCoverageComplete, true);
 });
 
 test("a failed queue probe is reported instead of silently counted as zero", async () => {
@@ -161,7 +175,7 @@ test("a card's last line is the newest item that is not encrypted reasoning", as
   });
 
   const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 2, maxItemProbes: 1, includeAccount: false });
-  const card = board.columns.find((column) => column.id === "unobserved").cards.find((entry) => entry.threadId === "T1");
+  const card = board.columns.find((column) => column.id === "no-activity").cards.find((entry) => entry.threadId === "T1");
   assert.equal(card.lastItem.type, "commandExecution");
   assert.equal(card.lastItem.turnId, "turn-1");
   assert.match(card.lastItem.text, /ls -la/);
@@ -177,7 +191,7 @@ test("a card with no readable item is left blank, not filled in", () => {
     threads: [THREAD("T1", 999)],
     items: { T1: { last: { type: "reasoning", text: "(reasoning not exposed: encrypted)", turnId: "turn-1" }, status: null } },
   });
-  const card = allReasoning.columns.find((column) => column.id === "unobserved").cards[0];
+  const card = allReasoning.columns.find((column) => column.id === "no-activity").cards[0];
   assert.equal(card.lastItem.type, "reasoning");
   assert.equal(card.lastItemStatus, null);
   assert.equal(buildBoard({ threads: [THREAD("T1", 999)] }).columns.at(-1).cards[0].lastItem, null);
@@ -189,7 +203,7 @@ test("a card's last text is clamped, like every other projected field", () => {
     threads: [THREAD("T1", 999)],
     items: { T1: { last: { type: "agentMessage", text: "x".repeat(5000) } } },
   });
-  const card = board.columns.find((column) => column.id === "unobserved").cards[0];
+  const card = board.columns.find((column) => column.id === "no-activity").cards[0];
   assert.ok(card.lastItem.text.length < 5000);
   assert.match(card.lastItem.text, /truncated \d+ chars/);
 });
@@ -204,7 +218,7 @@ test("a failed item probe is reported, not rendered as a thread with no history"
   assert.equal(board.probe.itemCoverageComplete, false);
   assert.equal(board.probe.itemProbeErrors.length, 1);
   assert.equal(board.probe.itemProbeErrors[0].threadId, "T1");
-  const card = board.columns.find((column) => column.id === "unobserved").cards[0];
+  const card = board.columns.find((column) => column.id === "no-activity").cards[0];
   assert.equal(card.lastItem, null);
   assert.equal(card.lastItemStatus, null);
 });

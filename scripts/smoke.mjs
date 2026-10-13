@@ -98,10 +98,39 @@ if (probe) {
   check(true, "thread/items/list", "skipped — no recent thread to probe");
 }
 
+// The board's colours rest on the turn rollups, and the handoff brief quotes
+// them, so these two reads have to answer on this build as well. Read-only.
+if (probe) {
+  const turns = await client.call("thread/turns/list", { threadId: probe, limit: 3, sortDirection: "desc", itemsView: "summary" });
+  const rollups = turns?.data ?? [];
+  check(Array.isArray(turns?.data), "thread/turns/list answered", `${rollups.length} recent turn(s)`);
+  check(
+    rollups.every((turn) => typeof turn?.id === "string" && typeof turn?.status === "string"),
+    "every turn carries an id and a status",
+    rollups[0] ? `newest is ${rollups[0].status}` : "",
+  );
+  const goal = await client.call("thread/goal/get", { threadId: probe });
+  check(goal !== null && typeof goal === "object", "thread/goal/get answered", goal?.goal ? `goal is ${goal.goal.status}` : "no goal on this thread");
+  const read = await client.call("thread/read", { threadId: probe });
+  check(typeof read?.thread?.id === "string", "thread/read answered", `${read.thread.originator ?? "?"} / ${read.thread.cliVersion ?? "?"}`);
+} else {
+  check(true, "thread/turns/list, thread/goal/get, thread/read", "skipped — no recent thread to probe");
+}
+
 // One whole board snapshot: every method it touches is a read, so this is safe
 // against a live app-server and proves the projection end to end.
-const snapshot = await collectBoard(client, null, { maxThreads: 3, maxQueueProbes: 1, maxItemProbes: 1, includeAccount: false });
-check(snapshot.columns.length === 4, "collectBoard built the four columns", `${snapshot.totals.threads} thread(s) listed`);
+const snapshot = await collectBoard(client, null, { maxThreads: 3, maxQueueProbes: 1, maxItemProbes: 1, maxTurnProbes: 1, includeAccount: true });
+check(snapshot.columns.length === 4, "collectBoard built the four state columns", `${snapshot.totals.threads} thread(s) listed`);
+check(
+  snapshot.totals.needsHuman + snapshot.totals.blocked + snapshot.totals.running + snapshot.totals.noActivity === snapshot.totals.threads,
+  "every card landed in exactly one state column",
+  `${snapshot.totals.running} running / ${snapshot.totals.blocked} blocked / ${snapshot.totals.needsHuman} needs you / ${snapshot.totals.noActivity} nothing observed`,
+);
+check(
+  snapshot.quota === null || typeof snapshot.quota.level === "string",
+  "the snapshot carries the quota verdict",
+  snapshot.quota ? snapshot.quota.line : "not read",
+);
 check(snapshot.probe.maxItemProbes === 1, "collectBoard honours maxItemProbes", `probed ${snapshot.probe.itemProbed.length}, failed ${snapshot.probe.itemProbeErrors.length}`);
 const labelled = snapshot.columns.flatMap((column) => column.cards).filter((card) => card.lastItem !== null);
 check(

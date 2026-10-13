@@ -50,3 +50,23 @@ test("describeNotification falls back to structural descriptions", () => {
 test("describeNotification ignores empty strings rather than echoing them", () => {
   assert.equal(describeNotification("m", { delta: "", text: "real" }), "real");
 });
+
+test("a budget update describes its windows instead of rendering blank", () => {
+  const line = describeNotification("account/rateLimits/updated", {
+    rateLimits: {
+      primary: { usedPercent: 12, windowDurationMins: 300 },
+      secondary: { usedPercent: 9, windowDurationMins: 10080 },
+      rateLimitReachedType: null,
+    },
+  });
+  assert.equal(line, "budget 12%/300min 9% weekly");
+  // The reached type is the one part of this notification a reader must not miss.
+  assert.equal(
+    describeNotification("account/rateLimits/updated", {
+      rateLimits: { primary: { usedPercent: 100, windowDurationMins: 300 }, secondary: null, rateLimitReachedType: "rate_limit_reached" },
+    }),
+    "budget 100%/300min REACHED: rate_limit_reached",
+  );
+  // Missing numbers are printed as unknown, never as zero.
+  assert.equal(describeNotification("account/rateLimits/updated", { rateLimits: { primary: {} } }), "budget ?/?min");
+});

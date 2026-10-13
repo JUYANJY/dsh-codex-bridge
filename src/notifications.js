@@ -44,6 +44,18 @@ export function describeNotification(method, params = {}) {
   for (const key of ["delta", "text", "chunk", "message", "summary"]) {
     if (typeof params[key] === "string" && params[key]) return params[key];
   }
+  // `account/rateLimits/updated` carries a single-bucket snapshot with no text
+  // of its own, so without this branch it renders as a blank line in a watch.
+  const rateLimits = params.rateLimits;
+  if (rateLimits && typeof rateLimits === "object") {
+    const percent = (bucket) => (Number.isFinite(bucket?.usedPercent) ? `${bucket.usedPercent}%` : "?");
+    const mins = (bucket) => (Number.isFinite(bucket?.windowDurationMins) ? `${bucket.windowDurationMins}min` : "?min");
+    const primary = rateLimits.primary ? `${percent(rateLimits.primary)}/${mins(rateLimits.primary)}` : null;
+    const secondary = rateLimits.secondary ? `${percent(rateLimits.secondary)} weekly` : null;
+    const reached = rateLimits.rateLimitReachedType ? ` REACHED: ${rateLimits.rateLimitReachedType}` : "";
+    const parts = ["budget", primary, secondary].filter(Boolean);
+    return `${parts.join(" ")}${reached}`;
+  }
   if (params.item?.type) return `item ${params.item.type}`;
   if (params.status?.type) return `status ${params.status.type}`;
   if (params.tokenUsage) return `tokens ${JSON.stringify(params.tokenUsage).slice(0, 160)}`;
