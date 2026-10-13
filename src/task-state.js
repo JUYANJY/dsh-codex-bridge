@@ -63,6 +63,35 @@ const ITEM_FAILED_STATUSES = new Set(["failed", "error", "errored"]);
 export const FRESH_ACTIVITY_MS = 90_000;
 
 /**
+ * How long a failed turn keeps a card in "Needs you".
+ *
+ * A failure the user watched happen (and chose not to retry) is not a task
+ * waiting on them a week later: the board's first live run produced three red
+ * cards whose newest failures were seconds, 3.6 days and 12.8 days old, and only
+ * the first wanted anything. A thread that still carries a goal keeps its red at
+ * any age, because a goal is Codex's standing statement about work that is meant
+ * to be running; without one, an old failure stays on the card as evidence and
+ * the card settles to "nothing observed" instead of shouting forever.
+ */
+export const FAILURE_ATTENTION_MS = 48 * 60 * 60_000;
+
+/**
+ * Render an age in the roughest unit that still says something.
+ * @param ms - milliseconds.
+ * @returns text like `12 minutes`, `4 hours`, `3.6 days`.
+ */
+export function formatAge(ms) {
+  if (!Number.isFinite(ms)) return "an unknown time";
+  const minutes = ms / 60_000;
+  if (minutes < 1) return `${Math.max(1, Math.round(ms / 1000))}s`;
+  if (minutes < 60) return `${Math.round(minutes)} minute${Math.round(minutes) === 1 ? "" : "s"}`;
+  const hours = minutes / 60;
+  if (hours < 36) return `${Math.round(hours)} hour${Math.round(hours) === 1 ? "" : "s"}`;
+  const days = hours / 24;
+  return `${days < 10 ? days.toFixed(1) : Math.round(days)} days`;
+}
+
+/**
  * Normalise a status string for comparison.
  * @param status - any status value from the protocol.
  * @returns lowercase, punctuation-free text.
@@ -73,12 +102,13 @@ export function statusKey(status) {
 
 /**
  * Which of the four states a thread is in, and why. Pure.
- * @param input - `{ thread, queue, item, waitingCount, turn, goal, observedTurn, now, freshMs, autopilotStopped }`.
+ * @param input - `{ thread, queue, item, waitingCount, turn, goal, observedTurn, now, freshMs, failureMs, autopilotStopped }`.
  * @returns `{ state, basis, reasons, evidence }`.
  */
 export function deriveTaskState(input = {}) {
   const now = Number.isFinite(input.now) ? input.now : Date.now();
   const freshMs = Number.isFinite(input.freshMs) ? input.freshMs : FRESH_ACTIVITY_MS;
+  const failureMs = Number.isFinite(input.failureMs) ? input.failureMs : FAILURE_ATTENTION_MS;
   const thread = input.thread ?? {};
   const queue = Array.isArray(input.queue) ? input.queue : [];
   const waitingCount = Number(input.waitingCount ?? 0);
@@ -119,11 +149,17 @@ export function deriveTaskState(input = {}) {
       return "needs-human";
     }
     if (turnKey === "failed") {
-      add("turn-failed", `The newest turn failed${turn?.error?.message ? `: ${turn.error.message}` : " and recorded no detail"}.`, "reported");
+      const detail = turn?.error?.message ? `: ${turn.error.message}` : " and recorded no detail";
+      const stale = !goalKey && activityAgeMs !== null && activityAgeMs > failureMs;
+      if (stale) {
+        add("turn-failed-stale", `The newest turn failed${detail}. That was ${formatAge(activityAgeMs)} ago, the thread has no goal, and nothing has moved since — kept as history rather than a call for you.`, "reported");
+        return "no-activity";
+      }
+      add("turn-failed", `The newest turn failed${detail}${activityAgeMs !== null ? ` (${formatAge(activityAgeMs)} ago)` : ""}.`, "reported");
       return "needs-human";
     }
     if (goalKey && GOAL_BLOCKED_STATUSES.has(goalKey)) {
-      add("goal-stopped", `Codex reports the thread's goal as ${goal.status}.`, "reported");
+      add("goal-stopped", `Codex reports the thread's goal as ${goal.status}${activityAgeMs !== null ? ` (last activity ${formatAge(activityAgeMs)} ago)` : ""}.`, "reported");
       return "needs-human";
     }
     if (input.autopilotStopped) {

@@ -5,7 +5,7 @@
  * @module dsh-codex-bridge/tools/budget
  */
 import { defineTool } from "@deepseek-ai/dsh-tools";
-import { DEFAULT_WARN_PCT, budgetLine, readBudget } from "../quota.js";
+import { DEFAULT_WARN_PCT, readBudget } from "../quota.js";
 
 /**
  * Build the budget tool.
@@ -85,7 +85,7 @@ export function budgetTool(bridge, options = {}) {
         return {
           level: budget.level,
           reason: budget.reason ?? "",
-          line: budgetLine(budget),
+          line: budget.line,
           planType: budget.planType ?? "",
           ordinaryUsageAllowed: budget.ordinaryUsageAllowed === null ? "not reported" : String(budget.ordinaryUsageAllowed),
           rateLimitReachedType: budget.rateLimitReachedType ?? "",

@@ -135,7 +135,7 @@ function byRecency(a, b) {
 
 /**
  * Build the board from already-collected facts. Pure.
- * @param input - `{ threads, queues, items, approvals, turns, turnLists, goals, plans, autopilotHalted, now }`.
+ * @param input - `{ threads, queues, items, approvals, turns, turnLists, goals, plans, autopilotHalted, autopilotPaused, failureMs, now }`.
  * @returns `{ generatedAt, columns, cards, totals, unattachedApprovals }`.
  */
 export function buildBoard(input = {}) {
@@ -151,6 +151,11 @@ export function buildBoard(input = {}) {
   const halted = input.autopilotHalted instanceof Map
     ? input.autopilotHalted
     : new Map(Array.isArray(input.autopilotHalted) ? input.autopilotHalted : []);
+  const pausedIds = new Set(
+    input.autopilotPaused instanceof Set
+      ? [...input.autopilotPaused]
+      : Array.isArray(input.autopilotPaused) ? input.autopilotPaused : [],
+  );
 
   const waitingByThread = new Map();
   const knownThreadIds = new Set(threads.map((thread) => thread.id));
@@ -190,6 +195,7 @@ export function buildBoard(input = {}) {
       goal,
       observedTurn,
       now,
+      failureMs: input.failureMs,
       autopilotStopped: haltReason,
     });
 
@@ -228,6 +234,7 @@ export function buildBoard(input = {}) {
       reasons,
       evidence,
       autopilotStopped: haltReason,
+      autopilotPaused: pausedIds.has(threadId),
       lastItem: probed?.last
         ? {
           type: probed.last.type ?? null,
@@ -386,6 +393,8 @@ export async function collectBoard(client, bridge = null, options = {}) {
     goals,
     plans,
     autopilotHalted: options.autopilotHalted,
+    autopilotPaused: options.autopilotPaused,
+    failureMs: options.failureMs,
     now: options.now,
   });
 

@@ -430,7 +430,7 @@ test("the autopilot is off by default, and arming it asks the host", async () =>
   assert.ok(arm, "the arm button never rendered");
   await arm.props.onClick();
   const setCall = client.calls.find((call) => call.method === "autopilot.set");
-  assert.deepEqual(setCall.payload, { armed: true, ttlMs: 30 * 60 * 1000, reason: "armed from the panel" });
+  assert.deepEqual(setCall.payload, { armed: true, ttlMinutes: 30, reason: "armed from the panel" });
   assert.equal(client.calls.filter((call) => call.method === "snapshot").length, 2, "arming re-reads the snapshot");
 });
 

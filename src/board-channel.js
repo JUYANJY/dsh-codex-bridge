@@ -111,6 +111,7 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
     includeAccount: options.includeAccount,
     warnPct: options.warnPct ?? payload?.warnPct,
     autopilotHalted: autopilot ? [...autopilot.halted.entries()].map(([threadId, record]) => [threadId, record.reason ?? null]) : [],
+    autopilotPaused: autopilot ? [...autopilot.paused] : [],
   });
 
   const snapshot = async (payload = {}) => {

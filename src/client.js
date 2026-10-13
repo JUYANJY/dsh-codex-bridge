@@ -42,8 +42,12 @@ window.__ModuleLoader__.load({
     /** How often the panel re-reads the snapshot. One snapshot is a handful of local reads. */
     const POLL_INTERVAL_MS = 5000;
 
-    /** How long one click arms the autopilot for. It disarms itself at the deadline. */
-    const ARM_TTL_MS = 30 * 60 * 1000;
+    /**
+     * How long one click arms the autopilot for. It disarms itself at the
+     * deadline. The host's knob is `ttlMinutes` (see `Autopilot.arm`), so the
+     * panel sends that rather than a millisecond count the host would ignore.
+     */
+    const ARM_TTL_MINUTES = 30;
 
     /** How much of a goal objective and of a reason line the card shows. */
     const GOAL_CHARS = 140;
@@ -259,7 +263,8 @@ window.__ModuleLoader__.load({
         h("div", { className: "dcb_stateRow" },
           h("span", { className: "dcb_chip", "data-state": state }, card.stateLabel || state),
           card.stateBasis ? h("span", { className: "dcb_basis" }, card.stateBasis) : null,
-          card.autopilotStopped ? h("span", { className: "dcb_basis", "data-kind": "halt" }, "autopilot stopped") : null
+          card.autopilotStopped ? h("span", { className: "dcb_basis", "data-kind": "halt" }, "autopilot stopped") : null,
+          card.autopilotPaused ? h("span", { className: "dcb_basis", "data-kind": "paused" }, "autopilot paused here") : null
         ),
         card.title ? h("div", { className: "dcb_cardTitle" }, card.title) : null,
         goal ? h("div", { className: "dcb_goal" }, "goal (" + (goal.status || "unknown") + "): " + short(goal.objective, GOAL_CHARS)) : null,
@@ -506,7 +511,7 @@ window.__ModuleLoader__.load({
         board ? h(AutopilotBar, {
           autopilot,
           busy,
-          onArm: () => act("autopilot.set", { armed: true, ttlMs: ARM_TTL_MS, reason: "armed from the panel" }),
+          onArm: () => act("autopilot.set", { armed: true, ttlMinutes: ARM_TTL_MINUTES, reason: "armed from the panel" }),
           onDisarm: () => act("autopilot.set", { armed: false, reason: "stopped from the panel" }),
           onTick: () => act("autopilot.tick", {}),
         }) : null,

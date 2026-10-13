@@ -116,3 +116,12 @@ test("budgetLine says what was read and, when it matters, why", () => {
   assert.match(budgetLine(budgetFromLimits({ error: "boom" })), /^quota: unknown \(the account read failed: boom\)$/);
   assert.equal(budgetLine(null), "quota: not read");
 });
+
+test("the projection carries its own one-line rendering, so no caller can drift", () => {
+  const budget = budgetFromLimits(limits());
+  assert.equal(budget.line, "quota: ok · 12% of 300min · 9% weekly · 2 reset credits");
+  assert.equal(budget.line, budgetLine(budget), "the projection and the helper agree");
+  // The failure path is a budget too: the panel shows it instead of a blank row.
+  const failed = budgetFromLimits({ error: "boom" });
+  assert.match(failed.line, /^quota: unknown \(the account read failed: boom\)$/);
+});

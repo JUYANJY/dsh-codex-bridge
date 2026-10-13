@@ -63,6 +63,29 @@ test("a thread waiting on approval is never hidden behind its queue", () => {
   assert.deepEqual(board.totals, { threads: 1, needsHuman: 1, blocked: 0, running: 0, noActivity: 0, queuedMessages: 1, waiting: 1 });
 });
 
+test("a thread the autopilot is paused on says so, without changing its state", () => {
+  const now = 1_700_000_000_000;
+  const recent = new Date(now - 30_000).toISOString();
+  const thread = (id) => ({ id, title: `thread ${id}`, preview: `preview ${id}`, cwd: "/repo", updatedAt: recent });
+  const rollup = (id, status) => ({ id, status, startedAt: 1, completedAt: 5, durationMs: 4, error: null, items: { count: 0, counts: {} } });
+  const board = buildBoard({
+    now,
+    threads: [thread("T1"), thread("T2")],
+    turnLists: { T1: [rollup("x", "failed")], T2: [rollup("y", "completed")] },
+    autopilotPaused: ["T2"],
+  });
+  const cards = board.columns.flatMap((column) => column.cards);
+  const paused = cards.find((card) => card.threadId === "T2");
+  const other = cards.find((card) => card.threadId === "T1");
+  // Pausing is the user's own choice about the autopilot, not a claim about the
+  // thread, so the state is untouched and only a chip appears.
+  assert.equal(paused.autopilotPaused, true);
+  assert.equal(paused.state, "no-activity");
+  assert.equal(other.autopilotPaused, false);
+  assert.equal(other.state, "needs-human", "a fresh failed turn still wants a person");
+  assert.equal(buildBoard({ now, threads: [thread("T1")], autopilotPaused: new Set(["T1"]) }).cards[0].autopilotPaused, true);
+});
+
 test("a turn counts as running only while this connection has not seen it finish", () => {
   const board = buildBoard({
     now: 1_000_000,

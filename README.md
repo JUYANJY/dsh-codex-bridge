@@ -47,7 +47,7 @@ reported a denominator** (a goal's token budget, or plan steps). With no
 denominator the card shows the counts it really has and says
 `no progress denominator reported` instead of drawing a bar from nothing.
 
-Five rules keep it honest:
+Six rules keep it honest:
 
 - A thread holding an approval this connection is responsible for is **Needs you**,
   and it is never filed under Blocked even when it also has queued messages.
@@ -59,6 +59,14 @@ Five rules keep it honest:
 - Every card carries a **last** line: the newest item the rollout reports that is not
   encrypted reasoning, with that item's own status printed verbatim. It reports what
   the thread last did; it is not a claim that a turn is running.
+- Age is part of the judgement, not decoration. A failed turn is **Needs you**
+  while it is fresh; on a thread with no goal, a failure older than
+  `FAILURE_ATTENTION_MS` (48 hours) keeps its error text as evidence and the card
+  settles to grey. The board's first live run was three red cards whose failures
+  were seconds, 3.6 days and 12.8 days old, and only the first wanted anything —
+  a red column that never empties is one people stop reading. The same failure on a
+  thread that still carries a goal stays red at any age, because the goal is Codex's
+  own standing statement about work that is meant to be running.
 - Queue, item, turn and goal inspection are sampled (a bounded number of threads per
   refresh, all of it reported in the snapshot's `probe` block), and the board says so
   rather than presenting a partial read as a total.
@@ -75,8 +83,9 @@ Needs-you, through `thread/queue/add` — the same single write `codex_send` use
 It skips a thread when an approval is pending, when the newest turn failed or asked
 a question, when the thread's queue is not empty, when a turn moved less than 90
 seconds ago, when it already sent to the same stuck turn, or when that thread has
-reached 3 continuations or the run has reached 6. Two failed sends halt that thread
-and the strip says so. Arming expires on its own after 30 minutes, `Stop keeping it
+reached 3 continuations or the run has reached 10. Two failed sends halt that thread
+and the strip says so, and a thread paused by hand is skipped and shows an
+`autopilot paused here` chip. Arming expires on its own after 30 minutes, `Stop keeping it
 moving` ends it immediately, and every decision — sent, skipped, halted, with the
 message it sent — is listed in the strip. It never answers an approval: a person
 still does that.
@@ -214,7 +223,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 160 unit tests, no Codex install required
+npm test            # 165 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 

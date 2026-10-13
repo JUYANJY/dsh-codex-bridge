@@ -314,3 +314,34 @@ exists only behind an explicit click:
 - What it cannot do: tell whether a continuation was *useful*. It observes that the
   thread stopped and that the queue was empty; it cannot see the desktop app's next
   move, so a "sent" entry means "queued", not "worked".
+
+## 15. What the board's first live run corrected
+
+Dropping 165 tests' worth of green onto a real panel immediately produced three
+things the tests could not have caught, which is the argument for running the real
+thing before believing the suite:
+
+- **Stale failures shouted forever.** Three of twelve cards were red because their
+  newest turn had failed — the oldest 12.8 days earlier, on a thread nobody had
+  touched since. A red column that never empties is a column people stop reading.
+  Failures now decay (see `FAILURE_ATTENTION_MS` in `src/task-state.js`), and a
+  thread with a goal keeps its red because the goal is a standing statement.
+- **The quota line was blank.** The panel rendered `quota.line`, the client test's
+  fixture had a `line`, and the host never produced one: `budgetLine()` was only
+  called by the `codex_budget` tool, so the fixture was asserting a field that
+  existed only in the fixture. `budgetFromLimits` now returns the line it renders,
+  so the tool, the panel and any future caller share one formatter.
+- **A paused thread looked like an untouched one.** The pause endpoint worked (the
+  autopilot's `paused` list filled up) but the card carried nothing to show it,
+  because the board was only told about *halted* threads. The channel now passes
+  `autopilotPaused` through and the card shows `autopilot paused here`.
+
+Two smaller things came out of the same pass: the panel was sending `ttlMs` while
+the host's knob is `ttlMinutes` (so the click worked by accident, via the default),
+and a card whose turn failed now says how long ago it was, in the reason text.
+
+One correction to the section above, for the record: an earlier read of this table
+reported the account at 12%/9% and then 25%/20% within the hour, and later still
+1%/30% — the buckets move with use, and the primary window resets on its own
+schedule (`resetsAt`). Nothing in the plugin extrapolates from those numbers; only
+the server's flags decide `reached`.

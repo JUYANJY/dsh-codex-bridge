@@ -50,11 +50,12 @@ export function budgetFromLimits(limitsResult, options = {}) {
   const byId = limitsResult?.rateLimitsByLimitId ?? null;
 
   if (error || !single) {
-    return {
+    const unknown = {
       checkedAt, level: "unknown", reason: error ? `the account read failed: ${error}` : "the account did not report rate limits", warnPct,
       ordinaryUsageAllowed: null, rateLimitReachedType: null, spendControlReached: null, planType: null,
       maxUsedPercent: null, windows: [], resetCredits: { availableCount: null, credits: [] }, error,
     };
+    return { ...unknown, line: budgetLine(unknown) };
   }
 
   // Prefer the per-limit-id view; fall back to the single legacy bucket. The two
@@ -101,7 +102,7 @@ export function budgetFromLimits(limitsResult, options = {}) {
     : [];
 
   const { level, reason } = classify({ ordinaryUsageAllowed, spendControlReached, reachedType, maxUsedPercent, warnPct });
-  return {
+  const budget = {
     checkedAt,
     level,
     reason,
@@ -118,6 +119,9 @@ export function budgetFromLimits(limitsResult, options = {}) {
     },
     error: null,
   };
+  // Every consumer gets the same one-line rendering, so the panel, the tool and
+  // any future caller cannot drift apart on how a quota reads.
+  return { ...budget, line: budgetLine(budget) };
 }
 
 /**

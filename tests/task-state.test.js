@@ -6,7 +6,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  FRESH_ACTIVITY_MS, STATE_LABELS, TASK_STATES, deriveTaskState, planFromNotifications, planSteps, progressOf, statusKey, trailingQuestion, turnStrip,
+  FRESH_ACTIVITY_MS, STATE_LABELS, TASK_STATES, deriveTaskState, formatAge, planFromNotifications, planSteps, progressOf, statusKey, trailingQuestion, turnStrip,
 } from "../src/task-state.js";
 
 const NOW = 1_700_000_000_000;
@@ -54,6 +54,57 @@ test("a failed turn is needs-human and quotes the error", () => {
   });
   assert.equal(result.state, "needs-human");
   assert.match(result.reasons[0].text, /stream disconnected before completion/);
+  assert.match(result.reasons[0].text, /10 minutes ago/);
+});
+
+test("a failed turn on an abandoned thread is history, not a call for a person", () => {
+  // The board's first live run showed a red card whose newest turn had failed
+  // 12.8 days earlier, on a thread with no goal. Nothing was waiting on anyone.
+  const result = deriveTaskState({
+    thread: thread({ updatedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString() }),
+    turn: turn({ status: "failed", completedAt: 5, error: { message: "You've hit your usage limit" } }),
+    now: NOW,
+  });
+  assert.equal(result.state, "no-activity");
+  assert.deepEqual(codes(result), ["turn-failed-stale"]);
+  assert.equal(result.basis, "reported");
+  assert.match(result.reasons[0].text, /usage limit/);
+  assert.match(result.reasons[0].text, /13 days ago/);
+});
+
+test("the same old failure stays needs-human when the thread still has a goal", () => {
+  const result = deriveTaskState({
+    thread: thread({ updatedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString() }),
+    turn: turn({ status: "failed", completedAt: 5, error: { message: "boom" } }),
+    goal: { status: "active", objective: "long haul" },
+    now: NOW,
+  });
+  assert.equal(result.state, "needs-human");
+  assert.deepEqual(codes(result), ["turn-failed"]);
+});
+
+test("failureMs is the knob that decides stale, and formatAge says the age", () => {
+  const twoDays = 2 * 24 * 3600_000;
+  const stale = deriveTaskState({
+    thread: thread({ updatedAt: new Date(NOW - twoDays - 1000).toISOString() }),
+    turn: turn({ status: "failed", completedAt: 5 }),
+    now: NOW,
+  });
+  assert.deepEqual(codes(stale), ["turn-failed-stale"]);
+  const fresh = deriveTaskState({
+    thread: thread({ updatedAt: new Date(NOW - twoDays - 1000).toISOString() }),
+    turn: turn({ status: "failed", completedAt: 5 }),
+    failureMs: 10 * 24 * 3600_000,
+    now: NOW,
+  });
+  assert.deepEqual(codes(fresh), ["turn-failed"]);
+  assert.equal(formatAge(45_000), "45s");
+  assert.equal(formatAge(10 * 60_000), "10 minutes");
+  assert.equal(formatAge(60 * 60_000), "1 hour");
+  assert.equal(formatAge(5 * 3600_000), "5 hours");
+  assert.equal(formatAge(36 * 3600_000), "1.5 days");
+  assert.equal(formatAge(20 * 24 * 3600_000), "20 days");
+  assert.equal(formatAge(Number.NaN), "an unknown time");
 });
 
 test("a system error on the thread itself is needs-human", () => {
