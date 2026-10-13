@@ -1,10 +1,16 @@
-# Loader patch fragment for this plugin.
+# Loader patch fragment for this plugin (this package's `dsh.bundle.patch`).
 #
-# DSH merges a bundle's patch into the active profile's `cordis.patch.yml`.
-# The entry id is what `plugin_manager` addresses; the name is the package
-# specifier resolved from the profile's node_modules.
+# A profile that lists this package in `dsh.profile.bundles` gets this layer
+# merged automatically, so a bundle install needs no hand-written entry.
+#
+# `id` is the short id the config tree and `plugin_manager` address. `name` is
+# the package specifier, resolved from the profile's node_modules — it must equal
+# the installed directory, which is the package name. Here that is the scoped
+# name. The checkout route (scripts/install.mjs) instead vendors the directory as
+# `dsh-codex-bridge` and writes its own entry with that name into the profile;
+# do not run both routes at once, or two entries will load two copies.
 - insert:
     - id: dsh-codex-bridge
-      name: dsh-codex-bridge
+      name: '@juyanjy/dsh-codex-bridge'
       config:
         requestTimeoutMs: 30000

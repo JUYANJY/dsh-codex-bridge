@@ -196,3 +196,21 @@ that catches a renamed field or a panel that throws. Two things stay outside
 every test — the shell mounting the two seats, and anything visual (CSS, widths,
 colours). Both need a browser and an eye.
 
+## 10. A loader entry's `name` is the installed directory, not the package name
+
+DSH resolves every name in a profile's `dsh.profile.bundles` from the profile's
+`node_modules` and merges the `dsh.bundle.patch` that package declares
+(`dsh-app-boot`: `packageDirFromAnchor` → `resolveBundleDir` → `loadProfile`), and
+the loader imports each entry's `name` as a module specifier from the profile
+anchor. Neither step compares it with the package's own `package.json.name`. Two
+consequences:
+
+- A package installed as `@juyanjy/dsh-codex-bridge` has to be named that in its
+  patch; a checkout vendored as `dsh-codex-bridge` has to be named that. Publishing
+  under a scope therefore changes `cordis.patch.yml`, not just `package.json`.
+- Installing a package both ways at once — bundle and checkout — loads the plugin
+  twice, because the two entries carry different `name`s and neither is deduped.
+
+The `id` is free: it is the address in the config tree and what `plugin_manager`
+takes, so both routes keep the short `dsh-codex-bridge` even though their `name`
+differs.

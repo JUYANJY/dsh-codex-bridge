@@ -85,9 +85,34 @@ assuming the message never went out.
 
 ## Install
 
-The plugin is loaded by name, so the profile needs two symlinks. The script
-creates them, moves any existing vendored copy aside (never deletes it), and
-records what it did so the change is reversible:
+### As a bundle (from GitHub)
+
+This package ships a `dsh.bundle.patch`, so a profile that installs it and lists
+it in `dsh.profile.bundles` mounts it with no hand-written YAML:
+
+```bash
+cd ~/.dsh/profiles/desktop
+pnpm add "git+https://github.com/JUYANJY/dsh-codex-bridge.git"
+```
+
+Then add `"@juyanjy/dsh-codex-bridge"` to `dsh.profile.bundles` in that
+`package.json`. That list is what the loader reads: it resolves every listed name
+from the profile's `node_modules` and merges the `dsh.bundle.patch` it declares.
+The DSH plugin UI does both steps for a bundle, and `dsh plugin --profile desktop
+add "<spec>"` forwards to pnpm inside the profile directory.
+
+Write the explicit `git+https://` URL — the `github:user/repo` shorthand goes over
+SSH and fails on a machine without a GitHub SSH key. This route was verified with
+a copy of a real profile: pnpm fetches `codeload.github.com/JUYANJY/dsh-codex-bridge`,
+installs `node_modules/@juyanjy/dsh-codex-bridge`, and the whole tree arrives —
+`cordis.patch.yml`, `docs/`, and every `src/*.js`.
+
+### From a checkout (the development route)
+
+For hacking on this repository, or for a profile that should track the working
+tree rather than a fetched copy, the plugin can be vendored and loaded by name
+instead. The script creates the two symlinks, moves any existing vendored copy
+aside (never deletes it), and records what it did so the change is reversible:
 
 ```bash
 node scripts/install.mjs --dry-run     # show the plan
@@ -98,11 +123,19 @@ node scripts/install.mjs --write-config # also append the loader entry if missin
 It targets `~/.dsh/profiles/desktop` by default; override with
 `--profile <dir>` or `DSH_PROFILE_DIR`.
 
-The npm package is `@juyanjy/dsh-codex-bridge` — the unscoped `dsh-codex-bridge`
-on npm belongs to an unrelated project, so it is not ours to use. The loader
-entry keeps the short id `dsh-codex-bridge` on purpose: a profile resolves that
-`name` as a module specifier, so it has to match the directory the install
-creates, and that is the directory shown above.
+The package name is `@juyanjy/dsh-codex-bridge` — the unscoped `dsh-codex-bridge`
+on npm belongs to an unrelated project, so it is not ours to use. The two routes
+spell the loader entry differently, and each has to match the directory it
+creates, because a profile resolves that `name` as a module specifier:
+
+| Route | Installed directory | Entry `name` |
+| --- | --- | --- |
+| bundle | `node_modules/@juyanjy/dsh-codex-bridge` | `@juyanjy/dsh-codex-bridge` (shipped in `cordis.patch.yml`) |
+| checkout | `node_modules/dsh-codex-bridge` → `vendor/dsh-codex-bridge` | `dsh-codex-bridge` (written into the profile) |
+
+Both keep the short id `dsh-codex-bridge`, which is what the config tree and
+`plugin_manager` address. Pick one route: with both installed, two entries load
+two copies of the plugin.
 
 Then restart DeepSeek Harness. **This is not optional**: `patchReload: live`
 re-reads config, not module code, so a running Harness keeps the module it already
@@ -121,10 +154,13 @@ missing, and `uninstall.mjs` tells you which block to remove.
 
 ## Configuration
 
+Every entry carries the same config; only `name` differs by install route (see
+the table above — the bundle route gets this from the shipped `cordis.patch.yml`).
+
 ```yaml
 - insert:
     - id: dsh-codex-bridge
-      name: dsh-codex-bridge
+      name: dsh-codex-bridge   # '@juyanjy/dsh-codex-bridge' for a bundle install
       config:
         binary: ""            # explicit path to `codex`; empty = auto-detect
         requestTimeoutMs: 30000
@@ -143,7 +179,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 76 unit tests, no Codex install required
+npm test            # 79 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
