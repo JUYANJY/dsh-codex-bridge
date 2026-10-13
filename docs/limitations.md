@@ -214,3 +214,42 @@ consequences:
 The `id` is free: it is the address in the config tree and what `plugin_manager`
 takes, so both routes keep the short `dsh-codex-bridge` even though their `name`
 differs.
+
+## 11. Publishing this package is gated, staged, and not instant
+
+Measured while publishing `0.1.0`. The npm account's 2FA is an **emailed one-time
+code**, and a plain session-token publish is refused outright:
+
+```
+403 Forbidden - PUT https://registry.npmjs.org/@juyanjy%2fdsh-codex-bridge
+Two-factor authentication or granular access token with bypass 2fa enabled is
+required to publish packages.
+```
+
+`--otp=<code>` does not reach that check. npm only turns `EOTP` or `E401 … one-time
+pass` into a prompt (`npm/lib/utils/auth.js`, `otplease`); this endpoint answers
+403, and the response carries no `www-authenticate` challenge either. The route
+that works is a granular access token with `bypass_2fa`:
+
+```bash
+npm token create --registry=https://registry.npmjs.org \
+  --name dsh-codex-bridge-publish --scopes=@juyanjy \
+  --packages-and-scopes-permission=read-write --bypass-2fa --expires 30
+npm publish --registry=https://registry.npmjs.org \
+  --//registry.npmjs.org/:_authToken=<token>
+```
+
+`--packages-all` is accepted by the CLI and rejected by the registry
+(`400 … You must have at least one package / scope or organization added to this
+token.`) — a scope is required. Each attempt needs a **fresh** emailed code: a code
+is single-use, and reusing one fails as `EOTP … typoed it, or it timed out`.
+
+The registry then publishes in two steps. A `0.0.0-stage` version appears first,
+whose own `package.json` is `{"version":"0.0.0-stage","stub":true,
+"description":"Temporary package placeholder for staged publishing"}`; the real
+version lands about two minutes later and stays alongside it. Propagation is
+slower still: after the CLI printed `+ @juyanjy/dsh-codex-bridge@0.1.0`, the
+version document (`/@juyanjy/dsh-codex-bridge/0.1.0`) answered 200 immediately,
+but the packument (`/@juyanjy%2fdsh-codex-bridge`) and the tarball both answered
+404 for about another five minutes. A browser showing "Not Found" right after a
+successful publish is therefore a propagation window, not a failed publish.

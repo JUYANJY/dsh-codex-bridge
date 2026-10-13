@@ -85,14 +85,17 @@ assuming the message never went out.
 
 ## Install
 
-### As a bundle (from GitHub)
+### As a bundle (from npm, or from GitHub)
 
 This package ships a `dsh.bundle.patch`, so a profile that installs it and lists
-it in `dsh.profile.bundles` mounts it with no hand-written YAML:
+it in `dsh.profile.bundles` mounts it with no hand-written YAML. It is published as
+[`@juyanjy/dsh-codex-bridge`](https://www.npmjs.com/package/@juyanjy/dsh-codex-bridge)
+on npm, so either source works:
 
 ```bash
 cd ~/.dsh/profiles/desktop
-pnpm add "git+https://github.com/JUYANJY/dsh-codex-bridge.git"
+pnpm add @juyanjy/dsh-codex-bridge                            # from npm
+pnpm add "git+https://github.com/JUYANJY/dsh-codex-bridge.git" # or straight from GitHub
 ```
 
 Then add `"@juyanjy/dsh-codex-bridge"` to `dsh.profile.bundles` in that
@@ -102,10 +105,13 @@ The DSH plugin UI does both steps for a bundle, and `dsh plugin --profile deskto
 add "<spec>"` forwards to pnpm inside the profile directory.
 
 Write the explicit `git+https://` URL — the `github:user/repo` shorthand goes over
-SSH and fails on a machine without a GitHub SSH key. This route was verified with
-a copy of a real profile: pnpm fetches `codeload.github.com/JUYANJY/dsh-codex-bridge`,
-installs `node_modules/@juyanjy/dsh-codex-bridge`, and the whole tree arrives —
-`cordis.patch.yml`, `docs/`, and every `src/*.js`.
+SSH and fails on a machine without a GitHub SSH key. The GitHub route was verified
+with a copy of a real profile: pnpm fetches
+`codeload.github.com/JUYANJY/dsh-codex-bridge`, installs
+`node_modules/@juyanjy/dsh-codex-bridge`, and the whole tree arrives —
+`cordis.patch.yml`, `docs/`, and every `src/*.js`. The npm route was verified by
+installing the published tarball into a clean directory: `added 1 package`,
+26 files, sha1 `608464f2…` — the same tarball the registry reports for `0.1.0`.
 
 ### From a checkout (the development route)
 
@@ -123,8 +129,9 @@ node scripts/install.mjs --write-config # also append the loader entry if missin
 It targets `~/.dsh/profiles/desktop` by default; override with
 `--profile <dir>` or `DSH_PROFILE_DIR`.
 
-The package name is `@juyanjy/dsh-codex-bridge` — the unscoped `dsh-codex-bridge`
-on npm belongs to an unrelated project, so it is not ours to use. The two routes
+The package name is `@juyanjy/dsh-codex-bridge` — ours, published on npm. The
+unscoped `dsh-codex-bridge` there belongs to an unrelated project, so it is not
+ours to use. The two routes
 spell the loader entry differently, and each has to match the directory it
 creates, because a profile resolves that `name` as a module specifier:
 
