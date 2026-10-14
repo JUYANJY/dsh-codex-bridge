@@ -32,6 +32,26 @@ function check(ok, label, detail = "") {
   if (!ok) failures += 1;
 }
 
+/**
+ * Is this error our client's fault, or did Codex fail to answer for its own
+ * reasons? The account endpoints are answered by OpenAI behind the local
+ * app-server, so a transport failure or a Codex-internal refusal says nothing
+ * about this plugin: it is reported loudly and does not fail the run, because the
+ * shape checks that follow still prove our half works.
+ *
+ * A protocol-shaped error is the opposite: it means we sent the wrong method or
+ * the wrong arguments, and that IS a hard failure.
+ */
+const OUR_FAULT = /method not found|unknown (method|variant)|invalid (params|request)|not supported|-32\d{3}|unexpected (type|value)/i;
+function checkBackend(label, error) {
+  const text = `${error?.message ?? error}`;
+  if (!OUR_FAULT.test(text)) {
+    console.log(`! ${label} — Codex could not answer for its own reasons: ${text.slice(0, 160)}`);
+    return;
+  }
+  check(false, label, String(error));
+}
+
 console.log("— entrypoint —");
 check(plugin.name === "codex-bridge", "plugin name", plugin.name);
 check(Array.isArray(plugin.inject) && plugin.inject.includes("tools"), "injects the tools service");
@@ -61,18 +81,26 @@ await client.start();
 check(client.alive, "handshake completed", `${Date.now() - started}ms`);
 
 const state = await readAccountState(client);
-check(
-  state.account !== undefined && state.account !== null && !state.account.error,
-  "account/read answered",
-  state.account?.account?.email ?? state.account?.account?.planType ?? String(state.account),
-);
+if (state.account?.error) {
+  checkBackend("account/read answered", state.account.error);
+} else {
+  check(
+    state.account !== undefined && state.account !== null,
+    "account/read answered",
+    state.account?.account?.email ?? state.account?.account?.planType ?? "no email or plan in the reply",
+  );
+}
 
 const limits = compactLimits(state.limits);
-check(
-  limits !== null,
-  "account/rateLimits/read answered",
-  limits?.primary ? `${limits.primary.usedPercent}% of ${limits.primary.windowMins}min window` : "no active window",
-);
+if (state.limits?.error) {
+  checkBackend("account/rateLimits/read answered", state.limits.error);
+} else {
+  check(
+    limits !== null,
+    "account/rateLimits/read answered",
+    limits?.primary ? `${limits.primary.usedPercent}% of ${limits.primary.windowMins}min window` : "no active window",
+  );
+}
 
 const threads = await listThreads(client, { limit: 5 });
 check(Array.isArray(threads), "thread/list answered", `${threads.length} recent thread(s)`);

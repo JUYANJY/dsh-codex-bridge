@@ -329,9 +329,13 @@ window.__ModuleLoader__.load({
           onBrief ? h("button", {
             className: "dcb_btn dcb_btnSmall", type: "button", onClick: () => onBrief(card),
           }, "Takeover brief") : null,
-          // Only offered where the honest answer is "a person must decide": a
-          // quota or auth failure. A retryable stop is the autopilot's job.
-          onTakeover && card.failure && (card.failure.kind === "quota" || card.failure.kind === "auth")
+          // Only offered where the honest answer is "a person must decide", and
+          // only while the card is actually asking: a fresh quota or auth stop.
+          // An ancient failure keeps its line as evidence but does not invite a
+          // takeover of a thread that settled days ago. A retryable stop is the
+          // autopilot's job.
+          onTakeover && card.state === "needs-human" && card.failure
+            && (card.failure.kind === "quota" || card.failure.kind === "auth")
             ? h("button", {
               className: "dcb_btn dcb_btnSmall", type: "button", onClick: () => onTakeover(card),
             }, "Prepare a takeover") : null,

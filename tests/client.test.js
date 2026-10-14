@@ -592,3 +592,27 @@ test("the panel shows the exact message the autopilot handed to Codex", async ()
   assert.match(textOf(shown), /自动续跑/);
   assert.match(textOf(tree), /Last message handed to Codex \(42 chars/);
 });
+
+test("an old quota failure keeps its line but does not invite a takeover", async () => {
+  const snapshot = fixture();
+  const card = snapshot.columns.find((column) => column.id === "no-activity").cards[1];
+  card.failure = { kind: "quota", retryable: false, text: "the account's quota or rate limit", matched: "usage limit", quoted: "You've hit your usage limit" };
+  card.failureAgeMs = 3 * 86_400_000;
+  card.state = "no-activity";
+
+  const client = bootClient([{ ok: true, value: snapshot }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  // The evidence stays: what happened, and how long ago.
+  const failure = byClass(tree, "dcb_failure")[0];
+  assert.ok(failure, "the failure line is kept as evidence");
+  assert.match(textOf(failure), /needs a person \(quota\)/);
+  assert.match(textOf(failure), /ended 72h 0m ago/);
+
+  // The invitation does not.
+  const labels = withClass(tree, "dcb_btn").map((button) => textOf(button));
+  assert.ok(!labels.includes("Prepare a takeover"), labels.join(" | "));
+});
