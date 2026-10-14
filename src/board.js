@@ -6,7 +6,7 @@
  * the panel cannot quietly invent a status the protocol never reported.
  *
  * The honesty rules this module exists to enforce:
- *  - the last column is "no observed activity", never "idle": a notification
+ *  - the last column is "Nothing observed", never "idle": a notification
  *    only reaches the connection that owns the turn (docs/limitations.md), so
  *    silence in this process proves nothing about the thread;
  *  - a card's colour comes from `task-state.js`, which names the rule behind

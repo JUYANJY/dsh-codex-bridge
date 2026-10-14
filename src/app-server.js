@@ -20,6 +20,20 @@ import { EventEmitter } from "node:events";
 import { createInterface } from "node:readline";
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
+
+/**
+ * The version this bridge reports in its own handshake. It is read from the
+ * package's `package.json` so it cannot drift from the release it ships in — it
+ * said `0.1.0` while the package was already `0.4.0`.
+ */
+const PACKAGE_VERSION = (() => {
+  try {
+    return createRequire(import.meta.url)("../package.json").version;
+  } catch {
+    return "unknown";
+  }
+})();
 
 /** CLI candidates, in preference order. */
 const CANDIDATES = [
@@ -137,7 +151,7 @@ export class CodexAppServer extends EventEmitter {
       "initialize",
       {
         // `clientInfo` is the only required field. Everything else here is opt-in.
-        clientInfo: { name: "dsh-codex-bridge", title: "DSH Codex Bridge", version: "0.1.0" },
+        clientInfo: { name: "dsh-codex-bridge", title: "DSH Codex Bridge", version: PACKAGE_VERSION },
         // Several methods the bridge needs (`thread/queue/*`, `turn/steer`,
         // `process/spawn`) answer `-32600 requires experimentalApi capability`
         // without this. The flag is the whole switch — there is no per-method grant.

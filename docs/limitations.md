@@ -147,7 +147,7 @@ limitation above and adds four of its own.
 `turn/completed` are notifications, and notifications go to the connection that
 owns the turn (limitation 3). A bridge connection therefore knows a turn is
 running only when *it* saw the start and never saw the finish. The last column is
-named **no observed activity** rather than "idle" for exactly this reason: with a
+named **Nothing observed** rather than "idle" for exactly this reason: with a
 desktop-owned thread, "nothing observed" and "nothing happening" are different
 claims, and only the first one is available here.
 
@@ -186,9 +186,15 @@ worth knowing before editing it: the host half needs a Harness restart
 (limitation 6), and the client half needs a page refresh unless
 `pnpm run dev:web` is running.
 
-It performs **no writes**. The snapshot endpoint is the whole surface, and the
-panel has no path to a write method — that is a deliberate P0 boundary, not an
-unfinished feature.
+It is **not read-only**, and its write surface is narrow on purpose. The route
+serves seven endpoints. `snapshot` and `handoff` only read. `takeover.prepare` may
+write the brief to disk and `takeover.claim` records the claim — both against the
+local takeover store, never against Codex. `autopilot.set` and `autopilot.pause`
+change run state that lives in memory for this Harness run. Exactly one endpoint,
+`autopilot.tick`, can reach Codex, and it writes through the same
+`thread/queue/add` that `codex_send` uses — only while the autopilot is armed
+(limitation 14). The deliberate boundary is "one write method, one queue"
+(limitation 2), not "no writes".
 
 Its React tree is rendered in the test process (`tests/client.test.js`) over a
 minimal React stand-in, against a snapshot shaped like the one the route serves:
@@ -305,11 +311,13 @@ exists only behind an explicit click:
 - It skips a thread when an approval is pending, when the newest turn failed or asked
   a question, when the queue is non-empty, when a turn moved within 90 seconds, when
   it already sent for the same stuck turn, or when that thread has had 3
-  continuations (6 per run in total).
+  continuations (10 per run in total — `maxPerThread` / `maxTotal` in
+  `src/autopilot.js`).
 - Two failed sends halt that thread permanently for the run (until disarmed and
   re-armed), with the server's own error text kept on the halt record.
-- Every decision is appended to a bounded log (80 entries, last 40 shown) and printed
-  in the panel's strip. The guard rules live in `src/autopilot.js` and are unit
+- Every decision is appended to a bounded log (80 entries; the host exposes the last
+  40 and the panel's strip renders the last 5) and printed in the panel's strip. The
+  guard rules live in `src/autopilot.js` and are unit
   tested; the panel only renders what the host decided.
 - What it cannot do: tell whether a continuation was *useful*. It observes that the
   thread stopped and that the queue was empty; it cannot see the desktop app's next
@@ -397,7 +405,8 @@ as limits:
   `agentMessage` (with its phase), the turn status, the error text, the age of the
   failure, the item counts. Codex's prose is taken from the recorded items — the
   newest `agentMessage` of the newest turn, read through `thread/turns/list`. A thread
-  whose turns cannot be read (an ephemeral `codex_ask` thread, see §12) has nothing to
+  whose turns cannot be read (an ephemeral `codex_ask` thread, see "Throwaway
+  threads" in `docs/protocol.md`) has nothing to
   quote, and the brief says so rather than inventing a summary.
 
 - **What it cannot know.** Whether the work Codex reported is *true*; whether the

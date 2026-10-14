@@ -12,12 +12,15 @@ processes; this file is about the wire format.
 ```jsonc
 // client -> server
 { "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
-    "clientInfo": { "name": "dsh-codex-bridge", "title": "DSH Codex Bridge", "version": "0.1.0" },
+    "clientInfo": { "name": "dsh-codex-bridge", "title": "DSH Codex Bridge", "version": "<package version>" },
     "capabilities": { "experimentalApi": true }      // without this, thread/queue/* is refused
 } }
 // then, as a notification:
 { "jsonrpc": "2.0", "method": "initialized", "params": {} }
 ```
+
+`clientInfo.version` is read from this package's own `package.json` at run time, so
+it cannot drift from the release it is part of.
 
 Messages are separated by design into three shapes, and the client routes them by
 which fields are present — this ordering matters:
@@ -35,19 +38,20 @@ A response is correlated by `id`; an error is turned into an `Error` carrying
 
 | Method | Used by | Notes |
 | --- | --- | --- |
-| `account/read` | `codex_status` | result is `{ account: { email, planType, … } }` |
-| `account/rateLimits/read` | `codex_status` | windows in `rateLimits.primary` / `.secondary` |
+| `account/read` | `codex_status`, the board | result is `{ account: { email, planType, … } }` |
+| `account/rateLimits/read` | `codex_status`, `codex_budget`, the board | windows in `rateLimits.primary` / `.secondary` |
 | `thread/list` | `codex_threads`, thread resolution | `{ limit, cwd? }` |
-| `thread/items/list` | `codex_transcript`, `codex_watch` | `{ threadId, limit, sortDirection }` |
-| `thread/queue/add` | `codex_send` | the cross-process write path |
-| `thread/queue/list` | `codex_queue action=list` | `{ threadId }`; entries carry no order field |
-| `thread/queue/delete` | `codex_queue action=delete` | needs `{ threadId, queuedSubmissionId }`; answers `{ deleted }` |
+| `thread/read` | `codex_handoff`, `codex_ask`'s poll | `{ threadId }`; also reports `ephemeral`, `turns`, `path`, `status` |
+| `thread/items/list` | `codex_transcript`, `codex_watch`, `codex_handoff`, the board | `{ threadId, limit, sortDirection }`; refused on ephemeral threads |
+| `thread/turns/list` | `codex_handoff`, `codex_ask`'s poll, the board | `{ threadId, limit, sortDirection, itemsView }`; `summary` keeps user/agent messages, `full` keeps every item |
+| `thread/goal/get` | `codex_handoff`, the board | `{ goal }` or `{ goal: null }` |
+| `thread/start` | `codex_ask` | opens a thread this connection owns, and it is ephemeral (see below) |
 | `thread/resume` | `codex_send mode=turn` | fails on a desktop-owned thread |
-| `turn/start` | `codex_send mode=turn` | needs this process to own the thread |
+| `turn/start` | `codex_send mode=turn`, `codex_ask` | needs this process to own the thread |
 | `turn/steer` | `codex_send mode=steer` | needs `expectedTurnId`; same lock problem |
-| `thread/read` | the board, `codex_handoff`, `codex_ask`'s poll | `{ threadId }`; also reports `ephemeral`, `turns`, `path`, `status` |
-| `thread/turns/list` | the board, `codex_handoff` | `{ threadId, limit, sortDirection, itemsView }`; `summary` keeps user/agent messages, `full` keeps every item |
-| `thread/goal/get` | the board | `{ goal }` or `{ goal: null }` |
+| `thread/queue/add` | `codex_send`, `codex_ask`, the autopilot | the cross-process write path |
+| `thread/queue/list` | `codex_queue action=list`, `codex_handoff`, the board, the autopilot | `{ threadId }`; entries carry no order field |
+| `thread/queue/delete` | `codex_queue action=delete` | needs `{ threadId, queuedSubmissionId }`; answers `{ deleted }` |
 | `thread/timeline/list` | probes only, not shipped | ordered items with a per-thread `position` |
 
 ## Verified result shapes

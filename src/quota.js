@@ -3,7 +3,7 @@
  * separate from percentages because percentages are advisory.
  *
  * The honest predicate (verified against a live app-server, see
- * docs/limitations.md §12) is, in order:
+ * docs/limitations.md §13) is, in order:
  *
  *   1. `ordinaryUsageAllowed === false` — the backend's final say. The schema's
  *      own wording: "Null means unavailable; clients must not infer recovery

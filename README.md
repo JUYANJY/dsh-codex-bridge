@@ -89,14 +89,19 @@ cannot push into a Harness conversation, so `claimed` may only be set by an expl
 the card reads *takeover prepared, unclaimed*, with that sentence attached. The
 records live in memory for the run; the file is on disk for whoever looks next.
 
-The panel has exactly three controls. Two only read: **Refresh**, and **Takeover
-brief**, which renders the same markdown `codex_handoff` builds, with a Copy
-button. The third is the one write path:
+The panel's controls are almost all reads, and exactly one of them can reach Codex.
+**Refresh** re-reads the snapshot. **Takeover brief** renders the same markdown
+`codex_handoff` builds, with Copy and Close buttons. **Pause this thread** /
+**Resume this thread** stops the autopilot from touching that one thread. **Prepare
+a takeover** and **Mark taken over** drive the local takeover store — the first only
+where a card is actually asking, the second only after the first. **Evaluate one
+pass** runs a single autopilot pass through the same guards, so with the autopilot
+off it writes nothing.
 
-**Keep Codex moving for 30m** arms the autopilot. While armed, and only then, a
-host-side timer may queue a continuation message into a **Blocked** thread, or into
-a **Needs you** thread whose failure the supervisor can read as transient, through
-`thread/queue/add` — the same single write `codex_send` uses.
+**Keep Codex moving for 30m** is the one that arms the autopilot. While armed, and
+only then, a host-side timer may queue a continuation message into a **Blocked**
+thread, or into a **Needs you** thread whose failure the supervisor can read as
+transient, through `thread/queue/add` — the same single write `codex_send` uses.
 
 ### What it sends
 
@@ -286,7 +291,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 212 unit tests, no Codex install required
+npm test            # 216 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
