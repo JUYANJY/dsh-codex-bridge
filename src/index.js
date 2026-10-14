@@ -102,6 +102,7 @@ export { clamp, compactLimits, extractText, listCodexProcesses, listItems, listT
 export { BOARD_COLUMNS, DEFAULT_MAX_TURN_PROBES, buildBoard, collectBoard, observeTurnState } from "./board.js";
 export { AUTOPILOT_DEFAULTS, Autopilot, continueMessage, decideAutoContinue, queueAutopilotMessage, stuckFingerprint } from "./autopilot.js";
 export { TASK_STATES, STATE_LABELS, deriveTaskState } from "./task-state.js";
+export { BRIEF_CHARS, classifyFailure, supervisionBrief, supervisionFingerprint } from "./supervise.js";
 export { BUDGET_LEVELS, DEFAULT_WARN_PCT, budgetFromLimits, budgetLine, readBudget } from "./quota.js";
 export { HANDOFF_ITEMS, HANDOFF_TURNS, buildHandoff, collectHandoff } from "./handoff.js";
 export { RPC_CHANNEL, RPC_ROUTE, createRouteHandler, mountBoardChannel } from "./board-channel.js";

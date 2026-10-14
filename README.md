@@ -80,20 +80,46 @@ brief**, which renders the same markdown `codex_handoff` builds, with a Copy
 button. The third is the one write path:
 
 **Keep Codex moving for 30m** arms the autopilot. While armed, and only then, a
-host-side timer may queue a continuation message into a thread that is **Blocked**,
-through `thread/queue/add` — the same single write `codex_send` uses. It never
-continues from **Needs you**: a red thread is one where a person has to decide
-something (an approval, a failed turn, a goal Codex itself marked blocked), and
-"keep it moving" must not paper over that.
-It skips a thread when an approval is pending, when the newest turn failed or asked
-a question, when the thread's queue is not empty, when a turn moved less than 90
-seconds ago, when it already sent to the same stuck turn, or when that thread has
-reached 3 continuations or the run has reached 10. Two failed sends halt that thread
+host-side timer may queue a continuation message into a **Blocked** thread, or into
+a **Needs you** thread whose failure the supervisor can read as transient, through
+`thread/queue/add` — the same single write `codex_send` uses.
+
+### What it sends
+
+Not a bare "continue". Every automatic message is a **supervision brief** built from
+that thread's own record — and only from it: the goal objective Codex was given,
+Codex's own last `agentMessage` word for word (with its phase), the newest turn's
+status and, when it failed, the error text Codex recorded plus how long ago that was,
+the item counts for the turn, and whether a queue is still unconsumed. Nothing is
+paraphrased and nothing is invented; where the record is empty the brief says so
+(`这个线程没有记录目标`, `没有留下可读的回复文字`).
+
+### What it will and will not pick up
+
+A red thread stays red when a person really is needed. The failure is classified from
+Codex's own error text, and only two kinds are retried:
+
+- **retryable** — `transient` (dropped stream, transport/network error, 502/503/504,
+  timeout) and `context` (context window exhausted). These are runs that stopped
+  mid-flight, not decisions, so the brief says `这类失败可以直接重试，不必等人`.
+- **never retried** — `quota` (usage limit, rate limit, spend control), `auth`
+  (credentials, 401/403), and `unknown`, which is anything the pattern list does not
+  recognise. The brief then says not to retry and to state what it needs instead.
+
+A thread waiting on an approval, a turn that asked a question, a queue that is not
+empty, a turn that moved less than 90 seconds ago, the same stuck turn twice, or the
+per-thread and per-run caps all still stop it. Two failed sends halt that thread
 and the strip says so, and a thread paused by hand is skipped and shows an
 `autopilot paused here` chip. Arming expires on its own after 30 minutes, `Stop keeping it
 moving` ends it immediately, and every decision — sent, skipped, halted, with the
-message it sent — is listed in the strip. It never answers an approval: a person
-still does that.
+message it sent — is listed in the strip. Cards that failed carry a
+`retryable failure (transient)` / `needs a person (quota)` line quoting the error, so
+what the supervisor decided and why is visible on the card, not just in the log. It
+never answers an approval: a person still does that.
+
+The classification is pattern matching over Codex's own error strings — a heuristic,
+not a diagnosis, and the module says so in every string it produces. It is written to
+fail closed: an unrecognised failure is left for a person rather than retried blindly.
 
 The client half is plain JS loaded by the web client — no build step, like the
 shipped client plugins, and it is re-read from disk on page load. The host half is
@@ -228,7 +254,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 165 unit tests, no Codex install required
+npm test            # 183 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
@@ -264,6 +290,7 @@ src/errors.js         the active-writer error and the explanation shown to users
 src/board.js          the projection the tools and the board share
 src/task-state.js     the four states, the reasons behind them, and the progress rules
 src/autopilot.js      the opt-in queue-only continuation policy, and its log
+src/supervise.js      reads Codex's own failure text, and writes the brief handed back
 src/quota.js          the one "is Codex out of quota" predicate
 src/handoff.js        the takeover brief, built from a thread's own records
 src/board-channel.js  the host route the panel calls (snapshot, autopilot, handoff)

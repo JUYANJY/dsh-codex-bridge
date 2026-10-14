@@ -107,6 +107,9 @@ window.__ModuleLoader__.load({
 .dcb_reason{font-size:11px;line-height:1.5;margin:4px 0 0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}
 .dcb_reason[data-state=needs-human]{color:var(--dsw-alias-state-error-primary,#c92a2a)}
 .dcb_reason[data-state=blocked]{color:var(--dsw-alias-state-warn-primary,#e8590c)}
+.dcb_failure{font-size:11px;line-height:1.5;margin:4px 0 0;overflow-wrap:anywhere;color:var(--dsw-alias-state-error-primary,#c92a2a)}
+.dcb_failure[data-retry=yes]{color:var(--dsw-alias-state-warn-primary,#e8590c)}
+.dcb_spoken{font-size:11px;line-height:1.5;margin:4px 0 0;overflow-wrap:anywhere;color:var(--dsw-alias-label-secondary)}
 .dcb_evidence{font-size:10px;line-height:1.5;color:var(--dsw-alias-label-tertiary);margin:4px 0 0;overflow-wrap:anywhere}
 .dcb_barWrap{margin-top:6px}
 .dcb_bar{height:6px;border-radius:999px;background:var(--dsw-alias-border-l1);overflow:hidden}
@@ -268,6 +271,18 @@ window.__ModuleLoader__.load({
         ),
         card.title ? h("div", { className: "dcb_cardTitle" }, card.title) : null,
         goal ? h("div", { className: "dcb_goal" }, "goal (" + (goal.status || "unknown") + "): " + short(goal.objective, GOAL_CHARS)) : null,
+        card.failure && card.failure.kind ? h("div", {
+          className: "dcb_failure",
+          "data-kind": card.failure.kind,
+          "data-retry": card.failure.retryable ? "yes" : "no",
+        },
+          (card.failure.retryable ? "retryable failure" : "needs a person") + " (" + card.failure.kind + ")",
+          card.failure.quoted ? ": " + short(card.failure.quoted, REASON_CHARS) : "",
+          typeof card.failureAgeMs === "number" ? " · ended " + durationLabel(card.failureAgeMs) + " ago" : ""
+        ) : null,
+        card.lastSpoken ? h("div", { className: "dcb_spoken" },
+          "Codex last said (" + (card.lastSpokenPhase || "unknown") + "): " + short(card.lastSpoken, GOAL_CHARS)
+        ) : null,
         reasons.map((reason, index) => h("div", {
           key: "r" + index, className: "dcb_reason", "data-state": reason?.severity === "info" ? "" : state,
         }, short(reason?.text ?? String(reason ?? ""), REASON_CHARS))),

@@ -278,6 +278,48 @@ test("only the cards the host probed get a last-action line", async () => {
   assert.deepEqual(byClass(tree, "dcb_lastText").map(textOf), ["$ rm -rf build", "Done: 3 files changed."]);
 });
 
+test("a failed card shows what failed, whether it may be retried, and Codex's own words", async () => {
+  const snapshot = fixture();
+  const cards = snapshot.columns.find((column) => column.id === "needs-human").cards;
+  cards[0].failure = {
+    kind: "transient",
+    retryable: true,
+    text: "a transient transport or network failure",
+    matched: "stream disconnected",
+    quoted: "stream disconnected before completion: Transport error",
+  };
+  cards[0].failureAgeMs = 2 * 24 * 3_600_000;
+  cards[0].lastSpoken = "I got as far as the migration.";
+  cards[0].lastSpokenPhase = "final_answer";
+
+  const blocked = snapshot.columns.find((column) => column.id === "no-activity").cards[0];
+  blocked.failure = {
+    kind: "quota",
+    retryable: false,
+    text: "the account's quota or rate limit",
+    matched: "usage limit",
+    quoted: "You've hit your usage limit.",
+  };
+  blocked.failureAgeMs = 3_600_000;
+
+  const client = bootClient([{ ok: true, value: snapshot }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  const lines = byClass(tree, "dcb_failure");
+  assert.equal(lines.length, 2);
+  assert.equal(lines[0].props["data-kind"], "transient");
+  assert.equal(lines[0].props["data-retry"], "yes");
+  assert.match(textOf(lines[0]), /^retryable failure \(transient\): stream disconnected before completion/);
+  assert.match(textOf(lines[0]), /ended 48h 0m ago/);
+  assert.equal(lines[1].props["data-kind"], "quota");
+  assert.equal(lines[1].props["data-retry"], "no");
+  assert.match(textOf(lines[1]), /^needs a person \(quota\): You've hit your usage limit\./);
+  assert.deepEqual(byClass(tree, "dcb_spoken").map(textOf), ["Codex last said (final_answer): I got as far as the migration."]);
+});
+
 test("the coverage notes follow the host's own flags, numbers included", async () => {
   const client = bootClient([{ ok: true, value: fixture() }]);
   client.render();

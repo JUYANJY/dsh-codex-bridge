@@ -32,6 +32,7 @@ import {
   STATE_HINTS, STATE_LABELS, TASK_STATES, deriveTaskState, planFromNotifications, progressOf, turnStrip,
 } from "./task-state.js";
 import { budgetFromLimits } from "./quota.js";
+import { classifyFailure } from "./supervise.js";
 
 /** How many recent threads one snapshot looks at. */
 export const DEFAULT_MAX_THREADS = 12;
@@ -57,6 +58,9 @@ export const ITEM_PROBE_LIMIT = 3;
 
 /** How much of an item's text reaches a card label. */
 export const LAST_ITEM_CHARS = 180;
+
+/** How much of Codex's own last message a card carries, for the supervision brief. */
+export const LAST_SPOKEN_CHARS = 400;
 
 /** How many turns `thread/turns/list` reads per thread: enough for the turn strip. */
 export const TURN_PROBE_LIMIT = 8;
@@ -199,7 +203,13 @@ export function buildBoard(input = {}) {
       autopilotStopped: haltReason,
     });
 
-    return {
+    // Codex's own words: the newest agent message of the newest turn. This is
+    // what a supervision brief quotes, so it comes from the recorded items
+    // rather than from anything this bridge composes.
+    const messages = Array.isArray(newestTurn?.items?.messages) ? newestTurn.items.messages : [];
+    const spoken = [...messages].reverse().find((entry) => entry?.type === "agentMessage") ?? null;
+
+    const card = {
       threadId,
       shortId: String(threadId ?? "").slice(0, 8),
       title: thread.title ?? null,
@@ -243,8 +253,19 @@ export function buildBoard(input = {}) {
         }
         : null,
       lastItemStatus: probed?.status ?? null,
+      lastSpoken: spoken ? clamp(String(spoken.text ?? "").replace(/\s+/g, " ").trim(), LAST_SPOKEN_CHARS) : null,
+      lastSpokenPhase: spoken?.phase ?? null,
       column: state,
     };
+
+    // When the newest turn failed: how long ago it stopped. task-state already
+    // worked this out from the turn's own completion time (falling back to the
+    // thread's last activity), so one number drives both the colour and the brief.
+    card.failureAgeMs = String(card.turnStatus ?? "").toLowerCase() === "failed"
+      ? (Number.isFinite(evidence?.failureAgeMs) ? evidence.failureAgeMs : ageOf(thread.updatedAt, now))
+      : null;
+    card.failure = classifyFailure(card);
+    return card;
   });
 
   const columns = BOARD_COLUMNS.map((definition) => ({

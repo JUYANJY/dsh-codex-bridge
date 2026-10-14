@@ -216,6 +216,58 @@ test("a card's last line is the newest item that is not encrypted reasoning", as
   assert.equal(board.probe.itemCoverageComplete, false);
 });
 
+test("a failed turn carries the failure's kind, its age and Codex's own last words", async () => {
+  const transport = "stream disconnected before completion: Transport error: network error: error decoding response body";
+  const client = stubClient({
+    "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1700 }] }),
+    "thread/queue/list": () => ({ data: [] }),
+    "thread/items/list": () => ({ data: [] }),
+    "thread/turns/list": () => ({
+      data: [{
+        id: "turn-9",
+        status: "failed",
+        error: { message: transport, codexErrorInfo: "other" },
+        startedAt: 1000,
+        completedAt: 1600,
+        items: [{ type: "agentMessage", phase: "final_answer", content: [{ type: "text", text: "I got as far as the migration." }] }],
+      }],
+    }),
+  });
+
+  // now = 1700s, the turn completed at 1600s: 100s ago.
+  const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 1, now: 1_700_000, includeAccount: false });
+  const card = board.columns.find((column) => column.id === "needs-human").cards[0];
+  assert.equal(card.failure.kind, "transient");
+  assert.equal(card.failure.retryable, true);
+  assert.match(card.failure.quoted, /stream disconnected before completion/);
+  assert.equal(card.failureAgeMs, 100_000);
+  assert.equal(card.lastSpoken, "I got as far as the migration.");
+  assert.equal(card.lastSpokenPhase, "final_answer");
+});
+
+test("a failure a person must decide is not reported as retryable", async () => {
+  const client = stubClient({
+    "thread/list": () => ({ data: [{ id: "T1", preview: "a", updatedAt: 1700 }] }),
+    "thread/queue/list": () => ({ data: [] }),
+    "thread/items/list": () => ({ data: [] }),
+    "thread/turns/list": () => ({
+      data: [{
+        id: "turn-9",
+        status: "failed",
+        error: { message: "You\'ve hit your usage limit. To get more access now, send a request to your admin." },
+        startedAt: 1000,
+        completedAt: 1600,
+        items: [],
+      }],
+    }),
+  });
+  const board = await collectBoard(client, { recentNotifications: [] }, { maxThreads: 1, now: 1_700_000, includeAccount: false });
+  const card = board.columns.find((column) => column.id === "needs-human").cards[0];
+  assert.equal(card.failure.kind, "quota");
+  assert.equal(card.failure.retryable, false);
+  assert.equal(card.lastSpoken, null, "no agentMessage was recorded, so nothing is quoted");
+});
+
 test("a card with no readable item is left blank, not filled in", () => {
   const allReasoning = buildBoard({
     now: 1_000_000,

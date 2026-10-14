@@ -1,6 +1,6 @@
 {
   "name": "@juyanjy/dsh-codex-bridge",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Observe and steer a local Codex (OpenAI) session from DeepSeek Harness, over the codex app-server protocol.",
   "license": "MIT",
   "author": "JUYANJY",
@@ -11,9 +11,15 @@
   "type": "module",
   "main": "src/index.js",
   "exports": {
-    ".": { "default": "./src/index.js" },
-    "./app-server": { "default": "./src/app-server.js" },
-    "./client": { "default": "./src/client.js" },
+    ".": {
+      "default": "./src/index.js"
+    },
+    "./app-server": {
+      "default": "./src/app-server.js"
+    },
+    "./client": {
+      "default": "./src/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -39,8 +45,12 @@
     "@deepseek-ai/schemastery": "*"
   },
   "peerDependenciesMeta": {
-    "@deepseek-ai/dsh-tools": { "optional": true },
-    "@deepseek-ai/schemastery": { "optional": true }
+    "@deepseek-ai/dsh-tools": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
   },
   "dsh": {
     "bundle": {

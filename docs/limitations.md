@@ -366,3 +366,42 @@ completion time, i.e. it was stopped or is still going).
 The general lesson, worth more than the fix: a field named `updatedAt` in this
 protocol means "someone looked at this thread", not "work happened". `recencyAt`
 exists alongside it for the same reason.
+
+## 17. The supervisor reads error text, not causes
+
+`src/supervise.js` decides whether a stopped run may be picked up again by matching
+Codex's own recorded error string against a list of patterns, and by quoting what
+Codex last said. Both halves are honest about being text, and both are worth stating
+as limits:
+
+- **It is pattern matching.** `transient` (dropped stream, transport/network error,
+  502/503/504, timeout) and `context` (context window exhausted) are retried; `quota`
+  (usage limit, rate limit, spend control), `auth` (401/403) and everything unmatched
+  are not. There is no error-code table to consult — the strings below are the actual
+  text this machine's threads recorded:
+
+  ```
+  Error running remote compact task: stream disconnected before completion:
+  Transport error: network error: error decoding response body      → transient
+  You've hit your usage limit. To get more access now, send a request
+  to your admin or try again on <date>                              → quota
+  ```
+
+  Note the first two: the same wrapper (`Error running remote compact task`) sits over
+  both, so the wrapper cannot be the signal — the inner text is. A new wrapper with a
+  new wording would be classified `unknown`, and `unknown` is never retried. That is
+  the designed failure direction: a stopped run stays stopped rather than looping on
+  something nobody understands.
+
+- **The brief quotes, it does not summarise.** Goal objective, Codex's last
+  `agentMessage` (with its phase), the turn status, the error text, the age of the
+  failure, the item counts. Codex's prose is taken from the recorded items — the
+  newest `agentMessage` of the newest turn, read through `thread/turns/list`. A thread
+  whose turns cannot be read (an ephemeral `codex_ask` thread, see §12) has nothing to
+  quote, and the brief says so rather than inventing a summary.
+
+- **What it cannot know.** Whether the work Codex reported is *true*; whether the
+  message it sends will actually restart anything (a queued message is delivered, but
+  the thread may fail again — that is what the per-thread cap and the two-failure halt
+  are for); and whether the goal objective is still what the user wants. The brief
+  restates the goal verbatim precisely because it cannot check it.

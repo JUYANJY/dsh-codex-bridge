@@ -15,6 +15,8 @@ import { CodexBridge } from "../src/bridge.js";
 import { allTools, TOOL_NAMES } from "../src/tools/index.js";
 import { compactLimits, listThreads, readAccountState } from "../src/codex.js";
 import { collectBoard } from "../src/board.js";
+import { decideAutoContinue } from "../src/autopilot.js";
+import { classifyFailure } from "../src/supervise.js";
 import * as plugin from "../src/index.js";
 
 let failures = 0;
@@ -138,6 +140,32 @@ check(
   "the probed thread came back with a last item",
   labelled.length > 0 ? `${labelled[0].lastItem.type}: ${labelled[0].lastItem.text.split("\n")[0].slice(0, 48)}` : "no item was readable",
 );
+
+// The supervisor's own error strings are the ones this machine really recorded, so
+// the classifier is exercised against them rather than against invented text.
+const transport = classifyFailure({
+  turnStatus: "failed",
+  turnError: { message: "Error running remote compact task: stream disconnected before completion: Transport error: network error: error decoding response body" },
+});
+const quota = classifyFailure({
+  turnStatus: "failed",
+  turnError: { message: "You've hit your usage limit. To get more access now, send a request to your admin." },
+});
+check(transport.kind === "transient" && transport.retryable === true, "a dropped stream is classified retryable", transport.text);
+check(quota.kind === "quota" && quota.retryable === false, "a usage limit is never retried by the supervisor", quota.text);
+const supervised = decideAutoContinue(
+  {
+    threadId: "smoke", state: "needs-human", waitingCount: 0, queuedCount: 0, ageMs: 3_600_000,
+    lastTurnId: "turn-1", turnStatus: "failed", turnError: { message: transport.quoted },
+    goal: { objective: "finish the smoke run", status: "active" }, lastItem: null, turnItemCounts: { agentMessage: 1 },
+    failure: transport, failureAgeMs: 2 * 86_400_000, lastSpoken: "I stopped after the first stage.",
+  },
+  { armed: true, expiresAt: Date.now() + 60_000, template: null },
+  {},
+  Date.now(),
+);
+check(supervised.code === "send-supervised-retry", "a transient failure is handed back to Codex", `${supervised.message.split("\n").length} brief line(s), ${supervised.message.length} chars`);
+check(/I stopped after the first stage\./.test(supervised.message), "the brief quotes Codex's own words");
 
 // The bridge is what the tools actually hold; make sure it can hand one out.
 const bridge = new CodexBridge({ binary: bin, requestTimeoutMs: 5000 });

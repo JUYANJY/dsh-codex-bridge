@@ -25,6 +25,7 @@
  */
 import { newClientMessageId } from "./app-server.js";
 import { clamp } from "./codex.js";
+import { classifyFailure, supervisionBrief } from "./supervise.js";
 
 /** Policy defaults. `ttlMs` is how long one arming lasts. */
 export const AUTOPILOT_DEFAULTS = {
@@ -112,9 +113,22 @@ export function decideAutoContinue(card, policy = {}, state = {}, now = Date.now
   if (Number.isFinite(policy.expiresAt) && now >= policy.expiresAt) return skip("window-expired", "The arming window has expired.");
   if (paused.has(threadId)) return skip("paused", "This thread is paused by hand.");
   if (halted.has(threadId)) return skip("thread-halted", `This thread was stopped after repeated send failures: ${halted.get(threadId)?.reason ?? "unknown"}.`);
-  if (card.state !== "blocked") return skip(`state-${card.state ?? "unknown"}`, `The task is ${card.state ?? "unknown"}; the autopilot only continues from "blocked".`);
+  // Two states may be picked up: a task simply stopped with a person-action
+  // reported as unnecessary ("blocked"), or a task stopped on a failure whose
+  // own error text says it was transient ("needs-human" + retryable). Anything
+  // else that is red stays red — that is the whole point of the colour.
+  const failure = card.failure ?? classifyFailure(card);
+  if (card.state === "needs-human") {
+    if (!failure.retryable) {
+      return skip("state-needs-human", `A person is needed here: ${failure.text || "the board reported no retryable failure"}.`);
+    }
+  } else if (card.state !== "blocked") {
+    return skip(`state-${card.state ?? "unknown"}`, `The task is ${card.state ?? "unknown"}; the autopilot only continues from "blocked" or a retryable "needs-human".`);
+  }
   if (card.waitingCount > 0) return skip("approval-pending", "An approval is waiting: that is work for a person, not for the autopilot.");
-  if (String(card.turnStatus ?? "").toLowerCase() === "failed") return skip("turn-failed", "The newest turn failed; someone has to look at why.");
+  if (String(card.turnStatus ?? "").toLowerCase() === "failed" && !failure.retryable) {
+    return skip("turn-failed", `The newest turn failed (${failure.kind ?? "unknown"}): someone has to look at why.`);
+  }
   if (card.queuedCount > 0) return skip("already-queued", "A message is already queued and nobody has consumed it.");
   const settleMs = Number.isFinite(policy.settleMs) ? policy.settleMs : AUTOPILOT_DEFAULTS.settleMs;
   if (typeof card.ageMs === "number" && card.ageMs < settleMs) {
@@ -131,11 +145,17 @@ export function decideAutoContinue(card, policy = {}, state = {}, now = Date.now
   if (record.lastAt && now - record.lastAt < minIntervalMs) {
     return skip("min-interval", `Waiting ${Math.ceil((minIntervalMs - (now - record.lastAt)) / 1000)}s before this thread can be continued again.`);
   }
+  const supervised = failure.retryable && Boolean(failure.kind);
   return {
     action: "send",
-    code: "send",
-    text: "The task is blocked with no person-action reported, so one more message is queued.",
-    message: continueMessage(card, policy.template),
+    code: supervised ? "send-supervised-retry" : "send",
+    text: supervised
+      ? `The newest turn stopped on ${failure.text}, which is not a decision for a person, so a supervision message is queued.`
+      : "The task is blocked with no person-action reported, so one more message is queued.",
+    // Default to the supervision brief: it quotes what Codex actually reported
+    // (goal, last words, the failure text and its age) instead of a bare
+    // "continue". A template, when configured, still wins.
+    message: policy.template ? continueMessage(card, policy.template) : supervisionBrief(card),
     fingerprint,
   };
 }
