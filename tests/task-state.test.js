@@ -18,7 +18,7 @@ function thread(overrides = {}) {
 
 /** One compact turn as `listTurns` projects it. */
 function turn(overrides = {}) {
-  return { id: "turn-1", status: "completed", completedAt: 1, startedAt: 1, error: null, items: { count: 0, counts: {}, messages: [] }, ...overrides };
+  return { id: "turn-1", status: "completed", completedAt: new Date(NOW - 60_000).toISOString(), startedAt: 1, error: null, items: { count: 0, counts: {}, messages: [] }, ...overrides };
 }
 
 /** Codes of the reasons a derivation produced. */
@@ -49,7 +49,7 @@ test("an approval this connection holds is needs-human, and says so", () => {
 test("a failed turn is needs-human and quotes the error", () => {
   const result = deriveTaskState({
     thread: thread(),
-    turn: turn({ status: "failed", completedAt: 5, error: { message: "stream disconnected before completion" } }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - 10 * 60_000).toISOString(), error: { message: "stream disconnected before completion" } }),
     now: NOW,
   });
   assert.equal(result.state, "needs-human");
@@ -62,7 +62,7 @@ test("a failed turn on an abandoned thread is history, not a call for a person",
   // 12.8 days earlier, on a thread with no goal. Nothing was waiting on anyone.
   const result = deriveTaskState({
     thread: thread({ updatedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString() }),
-    turn: turn({ status: "failed", completedAt: 5, error: { message: "You've hit your usage limit" } }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString(), error: { message: "You've hit your usage limit" } }),
     now: NOW,
   });
   assert.equal(result.state, "no-activity");
@@ -75,7 +75,7 @@ test("a failed turn on an abandoned thread is history, not a call for a person",
 test("the same old failure stays needs-human when the thread still has a goal", () => {
   const result = deriveTaskState({
     thread: thread({ updatedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString() }),
-    turn: turn({ status: "failed", completedAt: 5, error: { message: "boom" } }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - 12.8 * 24 * 3600_000).toISOString(), error: { message: "boom" } }),
     goal: { status: "active", objective: "long haul" },
     now: NOW,
   });
@@ -83,17 +83,33 @@ test("the same old failure stays needs-human when the thread still has a goal", 
   assert.deepEqual(codes(result), ["turn-failed"]);
 });
 
+test("the age of a failure is the turn's own end, not when the thread was last touched", () => {
+  // Opening a thread — or restarting Codex — bumps `updatedAt` while a turn that
+  // failed hours ago stays hours old. The live run caught exactly this: the
+  // app restart made a 1h19m-old transport failure read as "48s ago".
+  const threeDays = 3 * 24 * 3600_000;
+  const result = deriveTaskState({
+    thread: thread({ updatedAt: new Date(NOW - 30_000).toISOString() }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - threeDays).toISOString(), error: { message: "boom" } }),
+    now: NOW,
+  });
+  assert.equal(result.state, "no-activity");
+  assert.deepEqual(codes(result), ["turn-failed-stale"]);
+  assert.match(result.reasons[0].text, /3\.0 days ago/, "the reason quotes the turn's age, not the thread's");
+  assert.equal(result.evidence.failureAgeMs, threeDays);
+});
+
 test("failureMs is the knob that decides stale, and formatAge says the age", () => {
   const twoDays = 2 * 24 * 3600_000;
   const stale = deriveTaskState({
     thread: thread({ updatedAt: new Date(NOW - twoDays - 1000).toISOString() }),
-    turn: turn({ status: "failed", completedAt: 5 }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - 3 * 24 * 3600_000).toISOString() }),
     now: NOW,
   });
   assert.deepEqual(codes(stale), ["turn-failed-stale"]);
   const fresh = deriveTaskState({
     thread: thread({ updatedAt: new Date(NOW - twoDays - 1000).toISOString() }),
-    turn: turn({ status: "failed", completedAt: 5 }),
+    turn: turn({ status: "failed", completedAt: new Date(NOW - 3 * 24 * 3600_000).toISOString() }),
     failureMs: 10 * 24 * 3600_000,
     now: NOW,
   });

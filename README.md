@@ -59,10 +59,12 @@ Six rules keep it honest:
 - Every card carries a **last** line: the newest item the rollout reports that is not
   encrypted reasoning, with that item's own status printed verbatim. It reports what
   the thread last did; it is not a claim that a turn is running.
-- Age is part of the judgement, not decoration. A failed turn is **Needs you**
-  while it is fresh; on a thread with no goal, a failure older than
-  `FAILURE_ATTENTION_MS` (48 hours) keeps its error text as evidence and the card
-  settles to grey. The board's first live run was three red cards whose failures
+- Age is part of the judgement, not decoration, and the age is the **turn's own
+  end time** (`completedAt`), never when the thread was last touched — opening a
+  thread, or restarting Codex, bumps `updatedAt` and would otherwise make a
+  day-old failure look new. A failed turn is **Needs you** while it is fresh; on a
+  thread with no goal, a failure older than `FAILURE_ATTENTION_MS` (48 hours)
+  keeps its error text as evidence and the card settles to grey. The board's first live run was three red cards whose failures
   were seconds, 3.6 days and 12.8 days old, and only the first wanted anything —
   a red column that never empties is one people stop reading. The same failure on a
   thread that still carries a goal stays red at any age, because the goal is Codex's

@@ -101,6 +101,24 @@ export function statusKey(status) {
 }
 
 /**
+ * Epoch seconds, epoch millis, or an ISO string to milliseconds. `null` when the
+ * value says nothing (a missing completion time is not the epoch).
+ * @param value - `number | string | null | undefined`
+ * @returns milliseconds, or `NaN`
+ */
+export function completionMs(value) {
+  if (typeof value === "number") {
+    if (!Number.isFinite(value) || value <= 0) return NaN;
+    return value > 1e12 ? value : value * 1000;
+  }
+  if (typeof value === "string" && value) {
+    const parsed = Date.parse(value);
+    return Number.isFinite(parsed) ? parsed : NaN;
+  }
+  return NaN;
+}
+
+/**
  * Which of the four states a thread is in, and why. Pure.
  * @param input - `{ thread, queue, item, waitingCount, turn, goal, observedTurn, now, freshMs, failureMs, autopilotStopped }`.
  * @returns `{ state, basis, reasons, evidence }`.
@@ -118,6 +136,13 @@ export function deriveTaskState(input = {}) {
   const goalKey = statusKey(goal?.status);
   const updatedMs = thread.updatedAt ? Date.parse(thread.updatedAt) : NaN;
   const activityAgeMs = Number.isFinite(updatedMs) ? Math.max(0, now - updatedMs) : null;
+  // How long ago the turn *ended*, which is not the same as when the thread was
+  // last touched: opening a thread, or restarting Codex, bumps `updatedAt` while
+  // the turn that failed an hour ago stays an hour old. Only when the turn has no
+  // completion time (it was stopped, or is still going) does the thread's own
+  // freshness stand in for it.
+  const completedMs = completionMs(turn?.completedAt);
+  const failureAgeMs = Number.isFinite(completedMs) ? Math.max(0, now - completedMs) : activityAgeMs;
 
   const evidence = {
     turnId: turn?.id ?? null,
@@ -127,6 +152,7 @@ export function deriveTaskState(input = {}) {
     waitingCount,
     queuedCount: queue.length,
     activityAgeMs,
+    failureAgeMs,
     threadStatus: thread.status ?? null,
   };
 
@@ -150,12 +176,12 @@ export function deriveTaskState(input = {}) {
     }
     if (turnKey === "failed") {
       const detail = turn?.error?.message ? `: ${turn.error.message}` : " and recorded no detail";
-      const stale = !goalKey && activityAgeMs !== null && activityAgeMs > failureMs;
+      const stale = !goalKey && failureAgeMs !== null && failureAgeMs > failureMs;
       if (stale) {
-        add("turn-failed-stale", `The newest turn failed${detail}. That was ${formatAge(activityAgeMs)} ago, the thread has no goal, and nothing has moved since — kept as history rather than a call for you.`, "reported");
+        add("turn-failed-stale", `The newest turn failed${detail}. That turn ended ${formatAge(failureAgeMs)} ago, the thread has no goal, and nothing has moved since — kept as history rather than a call for you.`, "reported");
         return "no-activity";
       }
-      add("turn-failed", `The newest turn failed${detail}${activityAgeMs !== null ? ` (${formatAge(activityAgeMs)} ago)` : ""}.`, "reported");
+      add("turn-failed", `The newest turn failed${detail}${failureAgeMs !== null ? ` (that turn ended ${formatAge(failureAgeMs)} ago)` : ""}.`, "reported");
       return "needs-human";
     }
     if (goalKey && GOAL_BLOCKED_STATUSES.has(goalKey)) {

@@ -345,3 +345,24 @@ reported the account at 12%/9% and then 25%/20% within the hour, and later still
 1%/30% — the buckets move with use, and the primary window resets on its own
 schedule (`resetsAt`). Nothing in the plugin extrapolates from those numbers; only
 the server's flags decide `reached`.
+
+## 16. A restarted Codex made an old failure look new
+
+The board read `stream disconnected before completion: Transport error: network
+error: error decoding response body (48s ago)` for a turn that had actually failed
+1h19m earlier. The turn had not moved; the Codex desktop app had been restarted,
+which re-touches every thread it loads, and the state machine was measuring the
+failure's age from `thread.updatedAt`.
+
+Two consequences, one obvious and one not: the quoted age was wrong, and — because
+`updatedAt` also decides whether a failure is old enough to stop asking for a
+person — **any** thread you merely opened would have kept an ancient failure red
+forever, which is exactly the "red column people stop reading" problem this rule
+exists to prevent. The failure's age now comes from the turn's own `completedAt`
+(`completionMs()` accepts epoch seconds, epoch millis or an ISO string, and
+`failureAgeMs` falls back to the thread's freshness only when the turn has no
+completion time, i.e. it was stopped or is still going).
+
+The general lesson, worth more than the fix: a field named `updatedAt` in this
+protocol means "someone looked at this thread", not "work happened". `recencyAt`
+exists alongside it for the same reason.

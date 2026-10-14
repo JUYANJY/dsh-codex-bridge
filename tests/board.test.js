@@ -67,7 +67,15 @@ test("a thread the autopilot is paused on says so, without changing its state", 
   const now = 1_700_000_000_000;
   const recent = new Date(now - 30_000).toISOString();
   const thread = (id) => ({ id, title: `thread ${id}`, preview: `preview ${id}`, cwd: "/repo", updatedAt: recent });
-  const rollup = (id, status) => ({ id, status, startedAt: 1, completedAt: 5, durationMs: 4, error: null, items: { count: 0, counts: {} } });
+  const rollup = (id, status) => ({
+    id,
+    status,
+    startedAt: new Date(now - 120_000).toISOString(),
+    completedAt: new Date(now - 60_000).toISOString(),
+    durationMs: 60_000,
+    error: null,
+    items: { count: 0, counts: {} },
+  });
   const board = buildBoard({
     now,
     threads: [thread("T1"), thread("T2")],
