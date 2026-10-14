@@ -243,3 +243,50 @@ test("queueAutopilotMessage reports a queue re-read that cannot see the message"
   assert.equal(detail.visible, false);
   assert.equal(detail.id, "sub-9");
 });
+
+test("a pass reads the workspace first and sends a resume brief, not a restart", async () => {
+  const autopilot = new Autopilot();
+  autopilot.arm({ ttlMinutes: 5, minIntervalMs: 0, settleMs: 0 }, NOW);
+  const sent = [];
+  const result = await autopilot.runPass([card({ cwd: "/tmp/demo" })], {
+    now: NOW + 60_000,
+    workspace: async (entry) => {
+      assert.equal(entry.cwd, "/tmp/demo", "the read uses the thread's own directory");
+      return { state: "dirty", changedCount: 2, changedPaths: ["src/a.js", "src/b.js"] };
+    },
+    send: async (entry, message) => { sent.push(message); return { id: "sub-1", detail: "queued as sub-1" }; },
+  });
+
+  assert.equal(result.sent, 1);
+  assert.match(sent[0], /src\/a\.js, src\/b\.js/);
+  assert.match(sent[0], /不要重做已经完成的修改/);
+  const entry = autopilot.status(NOW).log.find((line) => line.code === "sent");
+  assert.equal(entry.replayRisk, "changed");
+  assert.match(entry.text, /resumed: the workspace already has changes/);
+});
+
+test("a workspace read that fails does not stop the message", async () => {
+  const autopilot = new Autopilot();
+  autopilot.arm({ ttlMinutes: 5, minIntervalMs: 0, settleMs: 0 }, NOW);
+  const sent = [];
+  const result = await autopilot.runPass([card()], {
+    now: NOW + 60_000,
+    workspace: async () => { throw new Error("git exploded"); },
+    send: async (entry, message) => { sent.push(message); return { id: "sub-2" }; },
+  });
+  assert.equal(result.sent, 1);
+  assert.match(sent[0], /工作区状态：无法确认（git exploded）/);
+  assert.match(sent[0], /按「继续、不重做」处理/);
+});
+
+test("a template still wins over the brief, and no workspace read happens without one", async () => {
+  const autopilot = new Autopilot();
+  autopilot.arm({ ttlMinutes: 5, minIntervalMs: 0, settleMs: 0 }, NOW);
+  autopilot.policy.template = "keep going on {objective}";
+  const sent = [];
+  await autopilot.runPass([card({ goal: { objective: "the migration" } })], {
+    now: NOW + 60_000,
+    send: async (entry, message) => { sent.push(message); return { id: "sub-3" }; },
+  });
+  assert.deepEqual(sent, ["keep going on the migration"]);
+});

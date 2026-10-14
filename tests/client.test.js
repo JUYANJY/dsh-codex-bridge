@@ -532,3 +532,63 @@ test("the takeover brief renders the host's markdown and can be copied", async (
   assert.equal(textOf(withClass(client.render(), "dcb_btn").find((button) => textOf(button) === "Copied")), "Copied");
   delete globalThis.navigator;
 });
+
+test("a prepared takeover is shown as unclaimed, and saying so is the default", async () => {
+  const snapshot = fixture();
+  const card = snapshot.columns[0].cards[0];
+  card.takeover = { prepared: true, claimed: false, path: "/tmp/demo/.codex-handoff/01aa-wait.md", preparedAt: 1, claimedAt: null, claimedBy: "" };
+  card.failure = { kind: "quota", retryable: false, text: "usage limit reached", matched: "usage limit" };
+
+  const client = bootClient([{ ok: true, value: snapshot }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  const block = byClass(tree, "dcb_takeover")[0];
+  assert.ok(block, "the takeover block is on the card");
+  assert.equal(block.props["data-claimed"], "no");
+  assert.equal(textOf(byClass(tree, "dcb_takeoverKind")[0]), "takeover prepared, unclaimed");
+  assert.match(textOf(byClass(tree, "dcb_takeoverBy")[0]), /not a handover/);
+
+  const labels = withClass(tree, "dcb_btn").map((button) => textOf(button)).filter(Boolean);
+  assert.ok(labels.includes("Prepare a takeover"), labels.join(" | "));
+  assert.ok(labels.includes("Mark taken over"), labels.join(" | "));
+});
+
+test("a claimed takeover says who took it, and stops offering the claim", async () => {
+  const snapshot = fixture();
+  const card = snapshot.columns[0].cards[0];
+  card.takeover = { prepared: true, claimed: true, path: "/tmp/demo/.codex-handoff/01aa-wait.md", preparedAt: 1, claimedAt: 2, claimedBy: "a DeepSeek Harness turn" };
+
+  const client = bootClient([{ ok: true, value: snapshot }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  assert.equal(byClass(tree, "dcb_takeover")[0].props["data-claimed"], "yes");
+  assert.equal(textOf(byClass(tree, "dcb_takeoverKind")[0]), "taken over");
+  assert.match(textOf(byClass(tree, "dcb_takeoverBy")[0]), /a DeepSeek Harness turn/);
+  const labels = withClass(tree, "dcb_btn").map((button) => textOf(button));
+  assert.ok(!labels.includes("Mark taken over"));
+});
+
+test("the panel shows the exact message the autopilot handed to Codex", async () => {
+  const snapshot = fixture();
+  snapshot.autopilot = {
+    ...snapshot.autopilot,
+    armed: true,
+    lastMessage: { at: 1, threadId: "01aa-wait", chars: 42, text: "继续（DeepSeek Harness 自动续跑）：the migration" },
+  };
+  const client = bootClient([{ ok: true, value: snapshot }]);
+  client.render();
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.render();
+
+  const shown = byClass(tree, "dcb_lastBrief")[0];
+  assert.ok(shown, "the last brief is rendered");
+  assert.match(textOf(shown), /自动续跑/);
+  assert.match(textOf(tree), /Last message handed to Codex \(42 chars/);
+});

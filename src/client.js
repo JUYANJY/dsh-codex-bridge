@@ -128,6 +128,12 @@ window.__ModuleLoader__.load({
 .dcb_badge[data-kind=wait]{color:var(--dsw-alias-state-warn-primary);border-color:var(--dsw-alias-state-warn-primary)}
 .dcb_badge[data-kind=queue]{color:var(--dsw-alias-state-business-primary);border-color:var(--dsw-alias-state-business-primary)}
 .dcb_badge[data-kind=status]{color:var(--dsw-alias-label-primary);border-color:var(--dsw-alias-label-secondary)}
+.dcb_lastBrief{display:block;white-space:pre-wrap;font-family:var(--dsw-font-mono, monospace);font-size:11px;line-height:1.45;margin-top:4px;padding:6px 8px;border-radius:6px;background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.10));max-height:180px;overflow:auto}
+.dcb_takeover{display:flex;flex-wrap:wrap;gap:6px;align-items:baseline;margin-top:7px;padding:6px 8px;border-radius:6px;border-left:3px solid var(--dsw-alias-state-warn-primary, #b26a00);background:var(--dsw-alias-interactive-bg-hover, rgba(127,127,127,.10))}
+.dcb_takeover[data-claimed="yes"]{border-left-color:var(--dsw-alias-state-business-primary, #1f6feb)}
+.dcb_takeoverKind{font-weight:600;color:var(--dsw-alias-label-secondary, inherit)}
+.dcb_takeoverPath{font-family:var(--dsw-font-mono, monospace);font-size:11px;color:var(--dsw-alias-label-tertiary, inherit);word-break:break-all}
+.dcb_takeoverBy{font-size:11px;color:var(--dsw-alias-label-tertiary, inherit)}
 .dcb_actions{display:flex;gap:5px;flex-wrap:wrap;margin-top:7px}
 .dcb_last{font-size:11px;line-height:1.5;margin:5px 0 0;overflow-wrap:anywhere}
 .dcb_lastKind{font-size:9.5px;text-transform:uppercase;letter-spacing:.04em;color:var(--dsw-alias-label-tertiary);margin-right:5px}
@@ -231,10 +237,10 @@ window.__ModuleLoader__.load({
 
     /**
      * One card.
-     * @param props - `{ card, autopilot, onPause, onBrief }`.
+     * @param props - `{ card, paused, onPause, onBrief, onTakeover, onClaim }`.
      * @returns the card element.
      */
-    function Card({ card, paused, onPause, onBrief }) {
+    function Card({ card, paused, onPause, onBrief, onTakeover, onClaim }) {
       const state = typeof card.state === "string" && card.state !== "" ? card.state : "no-activity";
       const badges = [];
       const itemStatus = card.lastItemStatus;
@@ -303,6 +309,13 @@ window.__ModuleLoader__.load({
           })),
           h("span", { className: "dcb_stripNote" }, "last " + turns.length + " recorded turns, oldest first")
         ) : null,
+        card.takeover ? h("div", { className: "dcb_takeover", "data-claimed": card.takeover.claimed ? "yes" : "no" },
+          h("span", { className: "dcb_takeoverKind" }, card.takeover.claimed ? "taken over" : "takeover prepared, unclaimed"),
+          h("span", { className: "dcb_takeoverPath" }, card.takeover.path || "(not saved)"),
+          card.takeover.claimed && card.takeover.claimedBy
+            ? h("span", { className: "dcb_takeoverBy" }, "by " + card.takeover.claimedBy)
+            : h("span", { className: "dcb_takeoverBy" }, "a brief nobody claimed is not a handover")
+        ) : null,
         card.lastItem ? h("div", { className: "dcb_last" },
           h("span", { className: "dcb_lastKind" }, "last " + (card.lastItem.type || "item")),
           h("span", { className: "dcb_lastText" }, card.lastItem.text)
@@ -315,7 +328,17 @@ window.__ModuleLoader__.load({
           }, paused ? "Resume this thread" : "Pause this thread") : null,
           onBrief ? h("button", {
             className: "dcb_btn dcb_btnSmall", type: "button", onClick: () => onBrief(card),
-          }, "Takeover brief") : null
+          }, "Takeover brief") : null,
+          // Only offered where the honest answer is "a person must decide": a
+          // quota or auth failure. A retryable stop is the autopilot's job.
+          onTakeover && card.failure && (card.failure.kind === "quota" || card.failure.kind === "auth")
+            ? h("button", {
+              className: "dcb_btn dcb_btnSmall", type: "button", onClick: () => onTakeover(card),
+            }, "Prepare a takeover") : null,
+          onClaim && card.takeover && !card.takeover.claimed
+            ? h("button", {
+              className: "dcb_btn dcb_btnSmall", type: "button", onClick: () => onClaim(card),
+            }, "Mark taken over") : null
         ),
         card.preview ? h("div", { className: "dcb_preview" }, card.preview) : null,
         card.cwd ? h("div", { className: "dcb_cwd" }, card.cwd) : null
@@ -333,6 +356,7 @@ window.__ModuleLoader__.load({
       const log = (autopilot && Array.isArray(autopilot.log) ? autopilot.log : []).slice(-5).reverse();
       const halted = autopilot && Array.isArray(autopilot.halted) ? autopilot.halted : [];
       const remaining = autopilot && Number.isFinite(autopilot.remainingMs) ? durationLabel(autopilot.remainingMs) : "";
+      const lastMessage = autopilot && autopilot.lastMessage && autopilot.lastMessage.text ? autopilot.lastMessage : null;
       return h("div", { className: "dcb_auto" },
         h("div", { className: "dcb_autoHead" },
           h("span", { className: "dcb_autoTitle" }, "Autopilot"),
@@ -352,6 +376,11 @@ window.__ModuleLoader__.load({
             : "Off. Nothing in this panel writes to Codex while it is off — the board only reads."),
         halted.map((entry) => h("div", { key: "h" + entry.threadId, className: "dcb_autoLine", "data-kind": "halt" },
           String(entry.threadId || "").slice(0, 8) + " · stopped: " + short(entry.reason, 200))),
+        lastMessage ? h("div", { className: "dcb_autoBody" },
+          "Last message handed to Codex (" + String(lastMessage.chars ?? lastMessage.text.length) + " chars, thread "
+          + String(lastMessage.threadId || "").slice(0, 8) + "): ",
+          h("span", { className: "dcb_lastBrief" }, lastMessage.text)
+        ) : null,
         log.map((entry, index) => h("div", { key: "l" + index, className: "dcb_autoLine" },
           (entry.at ? new Date(entry.at).toISOString().slice(11, 19) + "Z · " : "")
           + (entry.threadId ? String(entry.threadId).slice(0, 8) + " · " : "")
@@ -513,6 +542,8 @@ window.__ModuleLoader__.load({
                   paused: pausedSet.has(card.threadId),
                   onPause: board.autopilot ? (target, next) => act("autopilot.pause", { threadId: target.threadId, paused: next }) : null,
                   onBrief: openBrief,
+                  onTakeover: (target) => act("takeover.prepare", { threadId: target.threadId, cwd: target.cwd, force: true }),
+                  onClaim: (target) => act("takeover.claim", { threadId: target.threadId, claimedBy: "the panel" }),
                 }))
               : h("div", { className: "dcb_empty" }, "—"))
           )))

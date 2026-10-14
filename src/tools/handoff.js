@@ -12,7 +12,7 @@ import { collectHandoff } from "../handoff.js";
 /**
  * Build the handoff tool.
  * @param bridge - the shared bridge.
- * @param options - `{ timeoutMs, warnPct }`.
+ * @param options - `{ timeoutMs, warnPct, takeovers }`.
  * @returns a tool definition.
  */
 export function handoffTool(bridge, options = {}) {
@@ -33,6 +33,14 @@ export function handoffTool(bridge, options = {}) {
       items: { type: "integer", description: "How many recorded items to read (default 40)." },
       reason: { type: "string", description: "Why the handoff exists, quoted into the brief (defaults to a quota/stop explanation)." },
       saveTo: { type: "string", description: "Optional path to write the brief to (relative paths resolve against the working directory)." },
+      action: {
+        type: "string",
+        enum: ["read", "prepare", "claim"],
+        description: "read (default) returns the brief; prepare writes it as a takeover of a thread whose quota is "
+          + "reached; claim records that a person or this session has actually taken a prepared brief over. A prepared "
+          + "brief nobody claimed is not a handover, and the panel keeps saying so.",
+      },
+      claimedBy: { type: "string", description: "For action=claim: who is taking it over (default: a DeepSeek Harness turn)." },
     },
     output: {
       schema: {
@@ -72,12 +80,47 @@ export function handoffTool(bridge, options = {}) {
     },
     async execute(args) {
       const cwd = typeof args.cwd === "string" && args.cwd !== "" ? args.cwd : process.cwd();
+
+      // Claiming is bookkeeping, not a read: it needs no Codex call at all.
+      if (args.action === "claim") {
+        if (!options.takeovers) {
+          return {
+            ok: false, reason: "this build carries no takeover store", threadId: args.threadId ?? "", title: "", cwd,
+            budgetLevel: "", itemTypes: "", filesTouched: [], turns: 0, failures: 0, approvals: 0, queued: 0, savedTo: "", markdown: "",
+          };
+        }
+        const claim = options.takeovers.claim({
+          threadId: typeof args.threadId === "string" && args.threadId !== "" ? args.threadId : null,
+          path: typeof args.saveTo === "string" && args.saveTo !== "" ? args.saveTo : null,
+          claimedBy: typeof args.claimedBy === "string" && args.claimedBy !== "" ? args.claimedBy : "a DeepSeek Harness turn",
+        });
+        const record = claim.record ?? null;
+        return {
+          ok: claim.ok,
+          reason: claim.ok ? "" : claim.detail,
+          threadId: record?.threadId ?? args.threadId ?? "",
+          title: "takeover",
+          cwd,
+          budgetLevel: "",
+          itemTypes: "",
+          filesTouched: record?.path ? [record.path] : [],
+          turns: 0,
+          failures: 0,
+          approvals: 0,
+          queued: 0,
+          savedTo: record?.path ?? "",
+          markdown: claim.ok ? `${claim.detail}\n\nThe takeover of \`${record.threadId}\` is now recorded as claimed.` : claim.detail,
+        };
+      }
+
       const result = await bridge.withClient(async (client) => collectHandoff(client, {
         threadId: args.threadId,
         cwd,
         turns: Number.isFinite(args.turns) ? args.turns : undefined,
         items: Number.isFinite(args.items) ? args.items : undefined,
-        reason: typeof args.reason === "string" && args.reason !== "" ? args.reason : undefined,
+        reason: args.action === "prepare" && !(typeof args.reason === "string" && args.reason !== "")
+          ? "Codex's quota is reached; DeepSeek Harness is taking this over"
+          : (typeof args.reason === "string" && args.reason !== "" ? args.reason : undefined),
         warnPct: options.warnPct,
         timeoutMs: timeout,
       }));

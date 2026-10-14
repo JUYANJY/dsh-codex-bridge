@@ -30,7 +30,7 @@ exactly which parts are impossible rather than guessing.
 | `codex_queue` | Shows the messages still waiting on a thread (`action=list`), and cancels one with `action=delete`. Reports what the app-server confirmed, since a live session usually consumes a queued message first. |
 | `codex_budget` | Reads the rate-limit buckets and says whether Codex is out of quota, quoting the server's own flags. A high `usedPercent` is a level, not a limit, so 100% is not reported as "out of quota". |
 | `codex_ask` | One question on a throwaway Codex thread, with a chosen model and effort, then hands the answer back into a development thread verbatim (`feed:false` to only read it). It is the DSH↔Codex quick-chat path; a model override that Codex declines fails the call instead of quietly asking the default model. |
-| `codex_handoff` | Builds a takeover brief out of the thread's own records — the objective, the instruction quoted verbatim, what it touched, where it stopped, the quota at that moment, and what the brief cannot know. `saveTo` writes it to a file. |
+| `codex_handoff` | Builds a takeover brief out of the thread's own records — the objective, the instruction quoted verbatim, what it touched, where it stopped, the quota at that moment, and what the brief cannot know. `saveTo` writes it to a file. `action: "prepare"` writes it as a **takeover** of a thread whose quota is gone; `action: "claim"` records that a person or this session has actually taken it over. |
 
 ## Board
 
@@ -75,6 +75,20 @@ Six rules keep it honest:
 - The account line and the quota line come from the same predicate as
   `codex_budget`, and a reached quota is a warning that quotes the server's flag.
 
+### When Codex runs out: prepare, then claim
+
+A reached quota is the one failure nothing here retries — it is not a run that
+stopped, it is an account that ran out, and a red card that can never change is one
+people stop reading. So a quota card offers **Prepare a takeover**: the plugin writes
+the handoff brief to `<project>/.codex-handoff/<threadId>-<time>.md` and the card says
+so.
+
+**A prepared brief is not a handover, and the panel keeps saying so.** The plugin
+cannot push into a Harness conversation, so `claimed` may only be set by an explicit
+`codex_handoff action=claim` (or the card's **Mark taken over** button). Until then
+the card reads *takeover prepared, unclaimed*, with that sentence attached. The
+records live in memory for the run; the file is on disk for whoever looks next.
+
 The panel has exactly three controls. Two only read: **Refresh**, and **Takeover
 brief**, which renders the same markdown `codex_handoff` builds, with a Copy
 button. The third is the one write path:
@@ -94,6 +108,19 @@ the item counts for the turn, and whether a queue is still unconsumed. Nothing i
 paraphrased and nothing is invented; where the record is empty the brief says so
 (`这个线程没有记录目标`, `没有留下可读的回复文字`).
 
+### Resume, do not replay
+
+Before a supervised message is sent, the thread's working directory is read with
+`git status --porcelain` (read-only, 5s, never fatal). A resume is not a re-run: if
+the directory already carries uncommitted work — or the failing turn recorded file
+changes of its own — the brief says `工作区状态：the working directory already has N
+uncommitted change(s)` and lists them, followed by `不要重做已经完成的修改`. When the
+directory cannot be read (not a repository, git missing) the brief says it could not
+be confirmed and to treat the task as *continue, do not redo*; when it is clean the
+brief says that instead, so a retry is known to be safe. The check cannot know
+whether Codex already did work and committed it — that is what the brief's own
+"what this cannot know" section is for.
+
 ### What it will and will not pick up
 
 A red thread stays red when a person really is needed. The failure is classified from
@@ -112,7 +139,7 @@ per-thread and per-run caps all still stop it. Two failed sends halt that thread
 and the strip says so, and a thread paused by hand is skipped and shows an
 `autopilot paused here` chip. Arming expires on its own after 30 minutes, `Stop keeping it
 moving` ends it immediately, and every decision — sent, skipped, halted, with the
-message it sent — is listed in the strip. Cards that failed carry a
+message it sent, quoted in full — is listed in the strip. Cards that failed carry a
 `retryable failure (transient)` / `needs a person (quota)` line quoting the error, so
 what the supervisor decided and why is visible on the card, not just in the log. It
 never answers an approval: a person still does that.
@@ -127,7 +154,7 @@ imported at startup, so host changes need a Harness restart.
 
 ## What you cannot do, and why
 
-Four of these are **structural**, not missing features — full evidence in
+Five of these are **structural**, not missing features — full evidence in
 [`docs/limitations.md`](./docs/limitations.md):
 
 1. **The desktop app holds an exclusive write lock on every thread it has opened**,
@@ -142,6 +169,11 @@ Four of these are **structural**, not missing features — full evidence in
 4. **Reasoning bodies are encrypted.** You get the emitted summary — rendered as
    `(reasoning not exposed: encrypted)` when there is none — not the hidden chain
    of thought.
+5. **This plugin cannot push into a Harness conversation.** There is no protocol
+   method to hand a Codex thread's state to another process, and the panel is
+   called by the page, not the other way round. A takeover is therefore prepared
+   for a person (or a later Harness turn, via `codex_handoff action=claim`), never
+   injected.
 
 Also: `codex_send` is a **real write**, and the board's autopilot is a second, much
 narrower one (queue only, armed by a click, capped, expiring, and logged). A queued
@@ -254,7 +286,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 183 unit tests, no Codex install required
+npm test            # 212 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
@@ -293,7 +325,9 @@ src/autopilot.js      the opt-in queue-only continuation policy, and its log
 src/supervise.js      reads Codex's own failure text, and writes the brief handed back
 src/quota.js          the one "is Codex out of quota" predicate
 src/handoff.js        the takeover brief, built from a thread's own records
-src/board-channel.js  the host route the panel calls (snapshot, autopilot, handoff)
+src/workspace.js      "resume, do not replay": the read-only git status a pass sees
+src/takeover.js       what happens when the quota is gone: keep red, prepare, claim
+src/board-channel.js  the host route the panel calls (snapshot, autopilot, handoff, takeover)
 src/client.js         the panel itself; loaded by the web client, never by Node
 src/tools/*.js        one factory per tool
 ```

@@ -15,6 +15,7 @@
  * never presented as a diagnosis.
  */
 import { clamp } from "./codex.js";
+import { replayGuard } from "./workspace.js";
 
 /** How much of Codex's own prose goes into a brief. */
 export const BRIEF_QUOTE_CHARS = 400;
@@ -109,7 +110,9 @@ export function classifyFailure(card = {}) {
  * all of it quoted from the thread's own record, none of it invented.
  *
  * @param card - a board card.
- * @param options - `{ budget, now, chars }`.
+ * @param options - `{ workspace, budget, now, chars }`. `workspace` is a
+ *   `readWorkspace()` result; without it the brief says so rather than assuming
+ *   nothing changed.
  * @returns the message text.
  */
 export function supervisionBrief(card = {}, options = {}) {
@@ -143,6 +146,19 @@ export function supervisionBrief(card = {}, options = {}) {
   if (card.goal?.status) lines.push(`Codex 自己给这个目标标的状态：${card.goal.status}`);
   if (items) lines.push(`这个 turn 记录到的动作：${items}`);
   if (Number.isFinite(card.queuedCount) && card.queuedCount > 0) lines.push(`队列里还有 ${card.queuedCount} 条消息没被消费。`);
+
+  // Resume, do not replay: the working directory is read before this message is
+  // sent, and the brief says what it found.
+  const guard = replayGuard(card, options.workspace ?? null);
+  if (guard.risk === "changed") {
+    const listing = guard.paths.length > 0 ? `：${guard.paths.slice(0, 12).join(", ")}` : "";
+    lines.push(`工作区状态：${guard.note}${listing}`);
+    lines.push("⚠️ 不要重做已经完成的修改：请先读当前文件，从停下的地方继续；只有确有必要重做某一步时才重做，并在回复里说明原因。");
+  } else if (guard.risk === "clean") {
+    lines.push(`工作区状态：${guard.note}，所以没有需要保留的未提交修改。`);
+  } else {
+    lines.push(`工作区状态：无法确认（${guard.note}）；按「继续、不重做」处理。`);
+  }
 
   lines.push(
     failure.retryable

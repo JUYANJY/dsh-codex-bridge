@@ -26,6 +26,7 @@
 import { newClientMessageId } from "./app-server.js";
 import { clamp } from "./codex.js";
 import { classifyFailure, supervisionBrief } from "./supervise.js";
+import { replayGuard } from "./workspace.js";
 
 /** Policy defaults. `ttlMs` is how long one arming lasts. */
 export const AUTOPILOT_DEFAULTS = {
@@ -179,6 +180,7 @@ export class Autopilot {
     this.sent = new Map();
     this.total = 0;
     this.log = [];
+    this.lastMessage = null;
     this.passes = 0;
     this.lastPassAt = null;
     this.timer = null;
@@ -248,6 +250,9 @@ export class Autopilot {
       action: entry.action ?? "pass",
       code: entry.code ?? null,
       text: entry.text ?? "",
+      // Kept small on purpose: the log is shown in every snapshot, the message
+      // text itself is kept once in `lastMessage`.
+      replayRisk: entry.replayRisk ?? null,
     });
     if (this.log.length > MAX_LOG) this.log.splice(0, this.log.length - MAX_LOG);
   }
@@ -283,6 +288,7 @@ export class Autopilot {
       passes: this.passes,
       lastPassAt: this.lastPassAt ? new Date(this.lastPassAt).toISOString() : null,
       log: this.log.slice(-40),
+      lastMessage: this.lastMessage ?? null,
     };
   }
 
@@ -320,7 +326,21 @@ export class Autopilot {
         continue;
       }
       try {
-        const detail = await options.send?.(card, decision.message);
+        // Resume, do not replay: read the working directory first (never fatal),
+        // and compose the message with what it found.
+        let workspace = null;
+        if (typeof options.workspace === "function") {
+          try {
+            workspace = await options.workspace(card);
+          } catch (error) {
+            workspace = { state: "unknown", error: String(error?.message ?? error), changedPaths: [], changedCount: 0 };
+          }
+        }
+        const guard = replayGuard(card, workspace);
+        const message = this.policy.template
+          ? continueMessage(card, this.policy.template)
+          : supervisionBrief(card, { workspace, chars: this.policy.messageChars });
+        const detail = await options.send?.(card, message);
         sent += 1;
         const record = this.sent.get(card.threadId) ?? { count: 0, lastAt: null, fingerprint: null, failures: 0 };
         this.sent.set(card.threadId, {
@@ -331,13 +351,17 @@ export class Autopilot {
           lastMessageId: detail?.id ?? null,
         });
         this.total += 1;
+        // What was actually handed to Codex, so the panel can show it rather
+        // than describing it.
+        this.lastMessage = { at: now, threadId: card.threadId, text: String(message ?? ""), chars: String(message ?? "").length };
         const entry = {
           at: now,
           threadId: card.threadId,
           action: "sent",
           code: "sent",
-          text: `${String(detail?.detail ?? "queued")}${detail?.visible === false ? " (the queue re-read did not show it)" : ""}`,
-          message: decision.message,
+          text: `${String(detail?.detail ?? "queued")}${detail?.visible === false ? " (the queue re-read did not show it)" : ""}${guard.risk === "changed" ? " (resumed: the workspace already has changes)" : ""}`,
+          message,
+          replayRisk: guard.risk,
         };
         entries.push(entry);
         this.record(entry);

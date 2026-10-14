@@ -30,7 +30,7 @@ export const TOOL_NAMES = [
 /**
  * Build every tool, bound to one bridge.
  * @param bridge - the shared bridge.
- * @param options - `{ timeoutMs, consultModel, consultEffort, answerTimeoutMs, warnPct }`.
+ * @param options - `{ timeoutMs, consultModel, consultEffort, answerTimeoutMs, warnPct, takeovers }`.
  * @returns an array of tool definitions.
  */
 export function allTools(bridge, options = {}) {

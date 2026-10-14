@@ -17,6 +17,7 @@
  * @module dsh-codex-bridge/board-channel
  */
 import { queueAutopilotMessage } from "./autopilot.js";
+import { WORKSPACE_TIMEOUT_MS, readWorkspace } from "./workspace.js";
 import { collectHandoff } from "./handoff.js";
 import { collectBoard } from "./board.js";
 
@@ -96,12 +97,13 @@ export function createRouteHandler(handlers, log = () => {}) {
  *
  * @param ctx - the host plugin context.
  * @param bridge - the shared bridge the snapshot reads through.
- * @param options - `{ maxThreads, maxQueueProbes, maxTurnProbes, includeAccount, autopilot, autopilotTimeoutMs, tickIntervalMs, log }`.
+ * @param options - `{ maxThreads, maxQueueProbes, maxTurnProbes, includeAccount, warnPct, autopilot, autopilotTimeoutMs, takeovers, tickIntervalMs, log }`.
  * @returns `{ ok, path, reason? }`.
  */
 export function mountBoardChannel(ctx, bridge, options = {}) {
   const log = options.log ?? (() => {});
   const autopilot = options.autopilot ?? null;
+  const takeovers = options.takeovers ?? null;
   const autopilotTimeoutMs = options.autopilotTimeoutMs ?? 30_000;
 
   const collectOptions = (payload = {}) => ({
@@ -112,12 +114,18 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
     warnPct: options.warnPct ?? payload?.warnPct,
     autopilotHalted: autopilot ? [...autopilot.halted.entries()].map(([threadId, record]) => [threadId, record.reason ?? null]) : [],
     autopilotPaused: autopilot ? [...autopilot.paused] : [],
+    // The per-card takeover block, from the same store the panel's buttons write.
+    takeovers: takeovers ? takeovers.records : null,
   });
 
   const snapshot = async (payload = {}) => {
     const client = await bridge.connection();
     const board = await collectBoard(client, bridge, collectOptions(payload));
-    return { ...board, autopilot: autopilot ? autopilot.status() : null };
+    return {
+      ...board,
+      autopilot: autopilot ? autopilot.status() : null,
+      takeovers: takeovers ? takeovers.status() : null,
+    };
   };
 
   // The one place the plugin writes to Codex. It runs only while the autopilot
@@ -129,6 +137,8 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
     const board = await collectBoard(client, bridge, collectOptions({}));
     return autopilot.runPass(board.cards, {
       send: (card, message) => queueAutopilotMessage(client, card, message, { timeoutMs: autopilotTimeoutMs }),
+      // Read-only, and never fatal: the brief says "resume", not "start again".
+      workspace: (card) => readWorkspace({ cwd: card.cwd, timeoutMs: WORKSPACE_TIMEOUT_MS }),
     });
   };
 
@@ -156,6 +166,34 @@ export function mountBoardChannel(ctx, bridge, options = {}) {
             warnPct: options.warnPct ?? payload?.warnPct,
             timeoutMs: autopilotTimeoutMs,
           });
+        }],
+        // Takeover: prepare leaves a file, claim says a person actually took it.
+        // Without a claim the panel keeps saying "unclaimed" — the plugin cannot
+        // push into a Harness conversation, so it must not pretend it did.
+        ["takeover.prepare", async (payload = {}) => {
+          if (!takeovers) throw new Error("this build carries no takeover store");
+          const threadId = String(payload?.threadId ?? "");
+          if (!threadId) throw new Error("takeover.prepare needs a threadId");
+          const client = await bridge.connection();
+          return takeovers.prepare(client, {
+            threadId,
+            cwd: payload?.cwd,
+            reason: payload?.reason,
+            saveTo: payload?.saveTo,
+            force: payload?.force === true,
+            handoffArmed: payload?.handoffArmed !== false,
+            warnPct: options.warnPct ?? payload?.warnPct,
+            timeoutMs: autopilotTimeoutMs,
+          });
+        }],
+        ["takeover.claim", async (payload = {}) => {
+          if (!takeovers) throw new Error("this build carries no takeover store");
+          const result = takeovers.claim({
+            threadId: payload?.threadId ?? null,
+            path: payload?.path ?? null,
+            claimedBy: payload?.claimedBy ?? "the panel",
+          });
+          return { ...result, status: takeovers.status() };
         }],
         ["autopilot.set", async (payload = {}) => {
           if (!autopilot) throw new Error("this build carries no autopilot");

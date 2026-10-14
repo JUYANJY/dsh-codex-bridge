@@ -405,3 +405,42 @@ as limits:
   the thread may fail again — that is what the per-thread cap and the two-failure halt
   are for); and whether the goal objective is still what the user wants. The brief
   restates the goal verbatim precisely because it cannot check it.
+
+## 18. A prepared takeover is not a handover, and a resume is not a re-run
+
+When Codex's quota is gone the panel offers to **prepare a takeover**, and nothing
+about that operation is allowed to overstate itself.
+
+- **The plugin cannot push into a Harness conversation.** There is no protocol
+  method that transfers a Codex thread to another process, and the direction is
+  fixed the other way: the panel calls the host (`connection.fetch.register`), not
+  the reverse. So a prepared brief is a file plus a record, and the record carries
+  `claimedAt: null` until someone claims it — `codex_handoff action=claim`, or the
+  card's **Mark taken over** button. Until then the card reads *takeover prepared,
+  unclaimed*, with "a brief nobody claimed is not a handover" attached. Softening
+  that would be the easiest lie in the whole plugin.
+
+- **The records are in memory; the file is on disk.** A Harness restart forgets
+  which briefs were prepared and which were claimed. The markdown is still in
+  `<project>/.codex-handoff/`, and it is the same brief `codex_handoff` builds — the
+  file is the durable half, the claim state is not.
+
+- **A brief that could not be built is not a takeover.** `prepare` reports
+  `ok: false` with the reason (a thread that cannot be resolved, a quota that turns
+  out not to be reached, a directory that cannot be written). It never reports
+  success with an empty file.
+
+- **Resume, do not replay.** Before a supervised message is sent, `src/workspace.js`
+  runs `git status --porcelain` in the thread's own working directory (read-only,
+  5-second timeout, and a failure is never fatal). Two limits are stated in the brief
+  itself, not hidden: it can only see **uncommitted** work, so a change Codex already
+  committed is invisible to this check — the failing turn's recorded `fileChange`
+  count is used as a second signal for exactly that case — and a directory that is not
+  a repository (or a machine without git) reads as *could not be confirmed*, which the
+  brief passes on with "treat it as continue, do not redo" rather than guessing. The
+  check never writes, never commits, and never resets anything.
+
+- **What it still cannot know.** Whether the work Codex already did is *complete*
+  (a dirty directory says "something is here", not "this is the part you wanted"), and
+  whether a resumed run will get further than the one that stopped. Both are stated
+  on the card and in the brief.

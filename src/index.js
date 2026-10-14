@@ -14,6 +14,7 @@
  */
 import z from "@deepseek-ai/schemastery";
 import { Autopilot } from "./autopilot.js";
+import { Takeovers } from "./takeover.js";
 import { mountBoardChannel } from "./board-channel.js";
 import { CodexBridge } from "./bridge.js";
 import { allTools } from "./tools/index.js";
@@ -61,17 +62,19 @@ function reportChannelIssue(level, message) {
  */
 export function apply(ctx, config = {}) {
   const bridge = new CodexBridge(config);
+  // The panel can arm the autopilot, and only the panel can: it starts disarmed,
+  // and arming it is a visible, bounded, cancellable action. Takeovers are the
+  // same: prepared by an explicit click, claimed by an explicit click.
+  const autopilot = new Autopilot();
+  const takeovers = new Takeovers();
   const tools = allTools(bridge, {
+    takeovers,
     timeoutMs: config.requestTimeoutMs ?? 30000,
     consultModel: config.consultModel ?? "",
     consultEffort: config.consultEffort ?? "max",
     answerTimeoutMs: config.answerTimeoutMs ?? 180000,
     warnPct: config.warnPct ?? 80,
   });
-  // The panel can arm this, and only the panel can: it starts disarmed, and
-  // arming it is a visible, bounded, cancellable action.
-  const autopilot = new Autopilot();
-
   try {
     ctx.on?.("dispose", () => {
       autopilot.stopTimer();
@@ -85,10 +88,10 @@ export function apply(ctx, config = {}) {
 
   try {
     mountBoardChannel(ctx, bridge, {
+      takeovers,
       autopilot,
       autopilotTimeoutMs: config.requestTimeoutMs ?? 30000,
       warnPct: config.warnPct ?? 80,
-      warnPct: config.warnPct,
       log: reportChannelIssue,
     });
   } catch (error) {

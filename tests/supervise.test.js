@@ -144,6 +144,33 @@ test("a queued backlog is mentioned, and the brief stays inside its budget", () 
   assert.match(long, /\[truncated \d+ chars\]/);
 });
 
+test("the brief tells Codex to resume when work is already on disk", () => {
+  const brief = supervisionBrief(card({ turnError: { message: TRANSPORT } }), {
+    workspace: { state: "dirty", changedCount: 2, changedPaths: ["src/board.js", "docs/limitations.md"] },
+  });
+  assert.match(brief, /工作区状态：the working directory already has 2 uncommitted change\(s\)/);
+  assert.match(brief, /src\/board\.js, docs\/limitations\.md/);
+  assert.match(brief, /不要重做已经完成的修改/);
+});
+
+test("the brief is honest when the workspace could not be read", () => {
+  const brief = supervisionBrief(card({ turnError: { message: TRANSPORT } }), {
+    workspace: { state: "unknown", error: "this directory is not a git repository" },
+  });
+  assert.match(brief, /工作区状态：无法确认（this directory is not a git repository）/);
+  assert.match(brief, /按「继续、不重做」处理/);
+});
+
+test("a clean workspace is stated as clean, so a retry is known to be safe", () => {
+  const brief = supervisionBrief(card({ turnItemCounts: { commandExecution: 2 } }));
+  assert.match(brief, /工作区状态：无法确认（the working directory was not read）/);
+
+  const clean = supervisionBrief(card({ turnItemCounts: { commandExecution: 2 } }), {
+    workspace: { state: "clean", changedCount: 0, changedPaths: [] },
+  });
+  assert.match(clean, /工作区状态：the working directory is clean，所以没有需要保留的未提交修改/);
+});
+
 test("the fingerprint separates one stuck turn from another and one cause from another", () => {
   const base = card({ turnError: { message: TRANSPORT } });
   assert.equal(supervisionFingerprint(base), supervisionFingerprint(card({ turnError: { message: TRANSPORT } })));

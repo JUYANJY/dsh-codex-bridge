@@ -139,7 +139,7 @@ function byRecency(a, b) {
 
 /**
  * Build the board from already-collected facts. Pure.
- * @param input - `{ threads, queues, items, approvals, turns, turnLists, goals, plans, autopilotHalted, autopilotPaused, failureMs, now }`.
+ * @param input - `{ threads, queues, items, approvals, turns, turnLists, goals, plans, takeovers, autopilotHalted, autopilotPaused, failureMs, now }`.
  * @returns `{ generatedAt, columns, cards, totals, unattachedApprovals }`.
  */
 export function buildBoard(input = {}) {
@@ -155,6 +155,12 @@ export function buildBoard(input = {}) {
   const halted = input.autopilotHalted instanceof Map
     ? input.autopilotHalted
     : new Map(Array.isArray(input.autopilotHalted) ? input.autopilotHalted : []);
+  // A prepared takeover brief, per thread. Same shape either way, so callers
+  // may hand over the Takeovers instance's Map or a plain pair list.
+  const takeovers = input.takeovers instanceof Map
+    ? input.takeovers
+    : new Map(Array.isArray(input.takeovers) ? input.takeovers : []);
+
   const pausedIds = new Set(
     input.autopilotPaused instanceof Set
       ? [...input.autopilotPaused]
@@ -185,6 +191,17 @@ export function buildBoard(input = {}) {
     const turns = Array.isArray(turnLists[threadId]) ? turnLists[threadId] : [];
     const newestTurn = turns[0] ?? null;
     const goal = goals[threadId] ?? null;
+    const prepared = takeovers.get(threadId) ?? null;
+    const takeover = prepared
+      ? {
+        prepared: true,
+        claimed: prepared.claimedAt !== null && prepared.claimedAt !== undefined,
+        path: prepared.path ?? "",
+        preparedAt: prepared.preparedAt ?? null,
+        claimedAt: prepared.claimedAt ?? null,
+        claimedBy: prepared.claimedBy ?? "",
+      }
+      : null;
     const probed = items[threadId] ?? null;
     const halt = halted.get(threadId) ?? null;
     // Halted threads arrive either as `threadId -> reason` pairs (the channel) or
@@ -253,6 +270,7 @@ export function buildBoard(input = {}) {
         }
         : null,
       lastItemStatus: probed?.status ?? null,
+      takeover,
       lastSpoken: spoken ? clamp(String(spoken.text ?? "").replace(/\s+/g, " ").trim(), LAST_SPOKEN_CHARS) : null,
       lastSpokenPhase: spoken?.phase ?? null,
       column: state,
@@ -413,6 +431,7 @@ export async function collectBoard(client, bridge = null, options = {}) {
     turnLists,
     goals,
     plans,
+    takeovers: options.takeovers,
     autopilotHalted: options.autopilotHalted,
     autopilotPaused: options.autopilotPaused,
     failureMs: options.failureMs,

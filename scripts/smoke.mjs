@@ -10,13 +10,19 @@
  * Nothing here writes to a Codex thread. Usage:
  *   node scripts/smoke.mjs
  */
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
 import { CodexAppServer, resolveCodexBin } from "../src/app-server.js";
 import { CodexBridge } from "../src/bridge.js";
 import { allTools, TOOL_NAMES } from "../src/tools/index.js";
 import { compactLimits, listThreads, readAccountState } from "../src/codex.js";
 import { collectBoard } from "../src/board.js";
 import { decideAutoContinue } from "../src/autopilot.js";
-import { classifyFailure } from "../src/supervise.js";
+import { classifyFailure, supervisionBrief } from "../src/supervise.js";
+import { readWorkspace } from "../src/workspace.js";
+import { Takeovers, takeoverDecision } from "../src/takeover.js";
 import * as plugin from "../src/index.js";
 
 let failures = 0;
@@ -166,6 +172,25 @@ const supervised = decideAutoContinue(
 );
 check(supervised.code === "send-supervised-retry", "a transient failure is handed back to Codex", `${supervised.message.split("\n").length} brief line(s), ${supervised.message.length} chars`);
 check(/I stopped after the first stage\./.test(supervised.message), "the brief quotes Codex's own words");
+
+// Resume, do not replay: the real working directory is read the same way a pass reads it.
+const workspace = await readWorkspace({ cwd: process.cwd(), timeoutMs: 5000 });
+check(workspace.isRepo === true, "the workspace read found a repository", `${workspace.state} · ${workspace.changedCount} change(s)`);
+const withWorkspace = supervisionBrief(
+  { threadId: "smoke", turnError: { message: transport.quoted }, goal: { objective: "finish the smoke run", status: "active" }, turnItemCounts: { commandExecution: 3 } },
+  { workspace },
+);
+check(/工作区状态/.test(withWorkspace), "the brief states the workspace, so a retry is not a replay");
+
+// Takeover: a reached quota stays a call for a person until one is authorised.
+check(takeoverDecision({ level: "reached" }, { handoffArmed: false }).action === "keep-red", "a reached quota stays red without an authorised takeover");
+check(takeoverDecision({ level: "reached" }, { handoffArmed: true }).action === "prepare-handoff", "an authorised takeover prepares a brief");
+const prepared = await new Takeovers().prepare(client, {
+  threadId: (await listThreads(client, { limit: 1 }))[0]?.id,
+  cwd: mkdtempSync(join(tmpdir(), "dcb-smoke-handoff-")),
+  force: true,
+});
+check(prepared.ok === true && prepared.claimed === false, "a prepared brief is on disk and unclaimed", `${prepared.chars} chars at ${prepared.path}`);
 
 // The bridge is what the tools actually hold; make sure it can hand one out.
 const bridge = new CodexBridge({ binary: bin, requestTimeoutMs: 5000 });

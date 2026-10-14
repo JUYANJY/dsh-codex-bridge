@@ -403,3 +403,24 @@ test("mountBoardChannel never throws out of plugin activation", () => {
   };
   assert.doesNotThrow(() => mountBoardChannel(hostile, { connection: async () => stubClient({}) }, {}));
 });
+
+test("a card carries its takeover state, and an unclaimed brief is shown as unclaimed", () => {
+  const now = 1_000_000;
+  const takeovers = new Map([
+    ["T1", { threadId: "T1", path: "/tmp/demo/.codex-handoff/T1.md", preparedAt: now - 60_000, claimedAt: null, claimedBy: null }],
+    ["T2", { threadId: "T2", path: "/tmp/demo/.codex-handoff/T2.md", preparedAt: now - 120_000, claimedAt: now - 30_000, claimedBy: "a person" }],
+  ]);
+  const board = buildBoard({ now, threads: [THREAD("T1", 999), THREAD("T2", 998), THREAD("T3", 997)], takeovers });
+
+  const [one, two, three] = board.cards;
+  assert.equal(one.takeover.prepared, true);
+  assert.equal(one.takeover.claimed, false, "a brief nobody claimed is not a handover");
+  assert.equal(one.takeover.path, "/tmp/demo/.codex-handoff/T1.md");
+  assert.equal(two.takeover.claimed, true);
+  assert.equal(two.takeover.claimedBy, "a person");
+  assert.equal(three.takeover, null);
+
+  // A plain pair list works too, so callers need not build a Map.
+  const pairs = buildBoard({ now, threads: [THREAD("T1", 999)], takeovers: [["T1", { threadId: "T1", path: "x", preparedAt: 1, claimedAt: null }]] });
+  assert.equal(pairs.cards[0].takeover.prepared, true);
+});
