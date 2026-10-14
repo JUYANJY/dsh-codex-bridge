@@ -6,15 +6,18 @@
  * The profile resolves the plugin by name from `node_modules`, so the install is
  * two symlinks:
  *
- *   <profile>/vendor/dsh-codex-bridge          -> <this checkout>
- *   <profile>/node_modules/dsh-codex-bridge    -> ../vendor/dsh-codex-bridge
+ *   <profile>/vendor/@juyanjy/dsh-codex-bridge          -> <this checkout>
+ *   <profile>/node_modules/@juyanjy/dsh-codex-bridge    -> ../../vendor/@juyanjy/dsh-codex-bridge
  *
- * `dsh-codex-bridge` here is the *local* install id — the directory name and the
- * loader entry's `name`, which have to agree with each other. It is deliberately
- * not the npm package name: that is `@juyanjy/dsh-codex-bridge` (the unscoped
- * name on npm belongs to an unrelated project), and a profile that installs the
- * published package through a package manager gets whatever directory that
- * manager creates, with a matching entry name.
+ * The install id is this package's own `name`, read from package.json — never a
+ * local nickname, and never the directory this checkout happens to sit in. The
+ * host half loads by path and does not care, but the **client half does**: the
+ * web shell discovers panels by matching the loader row's `name` against the
+ * nearest `package.json`'s `name` (`locatePkgJson` → `nearestPackage` in
+ * `@deepseek-ai/dsh-client-modules`). An install id that differs from the
+ * manifest name makes that lookup return nothing and the panel is dropped
+ * **silently**, with no error anywhere: the plugin keeps working on the host and
+ * simply has no UI.
  *
  * The second hop is kept because it is the layout the profile already used; a
  * pre-existing real directory at either path is moved aside, never deleted, and
@@ -39,12 +42,21 @@ import { fileURLToPath } from "node:url";
 
 const WORKSPACE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const STATE_FILE = join(WORKSPACE, ".install-state.json");
-/** Local install id: the profile directory name and the loader entry's `name`. */
-const PLUGIN_NAME = "dsh-codex-bridge";
+/**
+ * The specifier every path and the loader row are built from: this package's own
+ * `name`. It must be exactly this — see the header on why a nickname silently
+ * costs the panel.
+ */
+const PLUGIN_NAME = JSON.parse(readFileSync(join(WORKSPACE, "package.json"), "utf8")).name;
+if (typeof PLUGIN_NAME !== "string" || PLUGIN_NAME === "") {
+  throw new Error(`${join(WORKSPACE, "package.json")} has no name`);
+}
+/** A cordis entry id, which is a plain identifier even when the name is scoped. */
+const ENTRY_ID = PLUGIN_NAME.includes("/") ? PLUGIN_NAME.slice(PLUGIN_NAME.lastIndexOf("/") + 1) : PLUGIN_NAME;
 
 const YAML_ENTRY = `- insert:
-    - id: ${PLUGIN_NAME}
-      name: ${PLUGIN_NAME}
+    - id: ${ENTRY_ID}
+      name: '${PLUGIN_NAME}'
       config:
         requestTimeoutMs: 30000
 `;

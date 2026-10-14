@@ -444,3 +444,45 @@ about that operation is allowed to overstate itself.
   (a dirty directory says "something is here", not "this is the part you wanted"), and
   whether a resumed run will get further than the one that stopped. Both are stated
   on the card and in the brief.
+
+## 19. The install id has to be the manifest name, or the panel vanishes silently
+
+The host half of this plugin loads by path, so it works under any directory name at
+all. The client half does not: the web shell's module registry
+(`@deepseek-ai/dsh-client-modules`, the copy inside the app bundle) discovers panels
+by calling `locatePkgJson(loaderName)` — `require.resolve(loaderName)`, then walk up
+from the resolved file and accept the first `package.json` **whose `name` equals
+`exactPackageSpecifier(loaderName)`**. A mismatch means `nearestPackage` returns
+`undefined`, the entry is skipped, and nothing anywhere logs it. The plugin keeps
+working on the host and simply has no UI.
+
+This bit us for real. The package was renamed to `@juyanjy/dsh-codex-bridge` when it
+went to npm (the unscoped name there belongs to an unrelated project), but the
+profile's loader row and its `node_modules` link still used the old nickname. After a
+restart the panel was gone while every host-side feature kept working, and the
+evidence was unambiguous:
+
+- `GET /` returned `window.__DSH_BOOT__` with 84 entry ids and **none** containing
+  "codex", while `@liustack/modlens`, `dsh-context` and `dsh-mattpocock-skills-deck`
+  were all listed.
+- `/plugins/??dsh-context/client.js&rev=…` answered `200` (433,630 bytes), and
+  `/plugins/??dsh-codex-bridge/client.js` answered `404` for every `rev`.
+- `require.resolve("dsh-codex-bridge")` from the profile *did* resolve to this
+  checkout. Resolution was never the problem — the name check was.
+
+So `scripts/install.mjs` now reads the install id from `package.json` instead of
+hardcoding one (it refuses to run without a name), vendors and links a scoped name
+under its scope, and keeps the loader entry's `id` a plain identifier while its
+`name` is the real specifier. `tests/install.test.js` pins all three, because the
+symptom is invisible from the host side.
+
+Two consequences worth keeping:
+
+- **Recognise the symptom, and do not chase the wrong thing.** Host tools work,
+  `POST /api/codexboard` answers, and the sidebar has no Codex row. That is a dropped
+  client entry, not a broken plugin, and the boot manifest is where it shows.
+- **Leftover unscoped symlinks are inert, not a fallback.** An older install left
+  `vendor/dsh-codex-bridge` and `node_modules/dsh-codex-bridge` behind. They resolve,
+  but nothing that matters uses them, and re-pointing a loader row at the nickname
+  reintroduces exactly this bug.
+
