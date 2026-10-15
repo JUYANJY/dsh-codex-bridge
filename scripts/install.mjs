@@ -217,8 +217,47 @@ if (carriedLinkBackup && linkBackup === carriedLinkBackup) {
   console.log(`✓ keeping the earlier node_modules backup for uninstall (${carriedLinkBackup})`);
 }
 
+// 3.5. Route-conflict guard. A checkout-linked dev plugin (installed through the
+//      two-hop symlink to an external checkout) that ALSO declares a self-inserting
+//      `dsh.bundle.patch` and is listed in the profile's `dsh.profile.bundles`
+//      resolves from two active Loader sources: the checkout config entry (base
+//      URL = profile) and the bundle-patch self-insert (base URL = the checkout
+//      real path, because the symlink makes the two base URLs differ). The host's
+//      `@deepseek-ai/dsh-client-modules` reconcile rejects that with "resolves from
+//      multiple active Loader sources", and the web boot then dies with
+//      "duplicate factory registration for dsh-codex-bridge". The checkout route
+//      already writes its own config entry, so the bundle route must not run in
+//      parallel: keep exactly ONE route (see the warning when both are detected).
+const profileManifestPath = join(profileDir, "package.json");
+let inProfileBundles = false;
+if (existsSync(profileManifestPath)) {
+  try {
+    const profileManifest = JSON.parse(readFileSync(profileManifestPath, "utf8"));
+    inProfileBundles = Array.isArray(profileManifest.dsh?.profile?.bundles)
+      && profileManifest.dsh.profile.bundles.includes(PLUGIN_NAME);
+  } catch (error) {
+    console.warn(`! could not read ${profileManifestPath} to check dsh.profile.bundles: ${error.message}`);
+  }
+}
+const packageManifest = JSON.parse(readFileSync(join(WORKSPACE, "package.json"), "utf8"));
+const bundlePatchRel = packageManifest.dsh?.bundle?.patch;
+const selfInsertingPatch = typeof bundlePatchRel === "string"
+  && existsSync(join(WORKSPACE, bundlePatchRel))
+  && readFileSync(join(WORKSPACE, bundlePatchRel), "utf8").includes(`name: '${PLUGIN_NAME}'`);
+if (inProfileBundles && selfInsertingPatch) {
+  console.warn(`\n! WARNING: ${PLUGIN_NAME} is listed in ${profileManifestPath} (dsh.profile.bundles)\n` +
+    `  and its dsh.bundle.patch (${bundlePatchRel}) still self-inserts (name: '${PLUGIN_NAME}').\n` +
+    `  For a checkout-linked install this loads the plugin from two Loader sources and the web boot\n` +
+    `  dies with "duplicate factory registration". Use exactly ONE route:\n` +
+    `    - keep the checkout config entry (this script's --write-config) and REMOVE the package from\n` +
+    `      dsh.profile.bundles, OR\n` +
+    `    - keep it as a bundle and neutralize the self-insert (empty ${bundlePatchRel}).`);
+}
+
 // 4. Loader registration.
-if (existsSync(patchFile) && readFileSync(patchFile, "utf8").includes(PLUGIN_NAME)) {
+if (inProfileBundles) {
+  console.log("✓ registered via dsh.profile.bundles; the checkout insert is intentionally not added (one route)");
+} else if (existsSync(patchFile) && readFileSync(patchFile, "utf8").includes(PLUGIN_NAME)) {
   console.log("✓ cordis.patch.yml already registers the plugin");
 } else if (args.writeConfig && !args.dryRun) {
   writeFileSync(patchFile, `${readFileSync(patchFile, "utf8").replace(/\n*$/, "\n")}\n${YAML_ENTRY}`);

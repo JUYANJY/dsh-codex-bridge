@@ -6,7 +6,10 @@
  * renaming the patch breaks every bundle install silently, so it is asserted here.
  *
  * The patch is read as text, not parsed: the unit tests carry no YAML dependency,
- * and these assertions are about two literal fields.
+ * and these assertions are about three literal facts. The row count matters as
+ * much as the name: `[]` unregisters the plugin with no error anywhere, and a
+ * second row registers the package twice — which is the duplicate-factory crash
+ * below this one.
  */
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -25,6 +28,17 @@ function patchName() {
   assert.ok(line, "cordis.patch.yml has no `name:` field");
   return line.replace(/^\s+name:\s*/, "").trim().replace(/^['"]|['"]$/g, "");
 }
+
+test("the patch declares exactly one insert row — never zero, never two", () => {
+  const rows = patch.match(/^- insert:/gm) ?? [];
+  assert.equal(
+    rows.length,
+    1,
+    rows.length === 0
+      ? "an empty patch is silent: no loader entry, no tools, and nothing to notice"
+      : "a second insert row mounts the same package twice, which is the duplicate-factory crash",
+  );
+});
 
 test("the shipped patch mounts the package name the manifest declares", () => {
   assert.equal(patchName(), manifest.name);
