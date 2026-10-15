@@ -21,6 +21,7 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const read = (name) => readFileSync(join(root, name), "utf8");
 const manifest = JSON.parse(read("package.json"));
 const patch = read("cordis.patch.yml");
+const client = read("src/client.js");
 
 /** The `name:` line under the insert entry, with its quotes stripped. */
 function patchName() {
@@ -42,6 +43,16 @@ test("the patch declares exactly one insert row — never zero, never two", () =
 
 test("the shipped patch mounts the package name the manifest declares", () => {
   assert.equal(patchName(), manifest.name);
+});
+
+test("the client factory registers under the package name", () => {
+  const match = client.match(/window\.__ModuleLoader__\.load\(\{\s*id:\s*["']([^"']+)["']/);
+  assert.ok(match, "src/client.js has no client-module factory registration");
+  assert.equal(
+    match[1],
+    manifest.name,
+    "a different factory id makes the preloaded scoped bundle look absent, so the loader executes it twice",
+  );
 });
 
 test("the entry id stays the short local id, which is not the package name", () => {

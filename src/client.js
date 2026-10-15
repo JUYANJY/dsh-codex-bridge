@@ -23,7 +23,7 @@
  */
 
 window.__ModuleLoader__.load({
-  id: "dsh-codex-bridge",
+  id: "@juyanjy/dsh-codex-bridge",
   factory: (require) => {
     var module = { exports: {} };
     var exports = module.exports;

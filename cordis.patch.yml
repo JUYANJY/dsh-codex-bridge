@@ -5,10 +5,9 @@
 #
 # `id` is the short id the config tree and `plugin_manager` address. `name` is
 # the package specifier, resolved from the profile's node_modules — it must equal
-# the installed directory, which is the package name. Here that is the scoped
-# name. The checkout route (scripts/install.mjs) instead vendors the directory as
-# `dsh-codex-bridge` and writes its own entry with that name into the profile;
-# do not run both routes at once, or two entries will load two copies.
+# the installed directory and the client factory id. Both bundle installs and
+# checkout symlinks use this package's scoped name. When this bundle route is
+# active, do not add a second hand-written row to the profile patch.
 - insert:
     - id: dsh-codex-bridge
       name: '@juyanjy/dsh-codex-bridge'

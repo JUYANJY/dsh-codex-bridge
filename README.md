@@ -235,19 +235,23 @@ It targets `~/.dsh/profiles/desktop` by default; override with
 `--profile <dir>` or `DSH_PROFILE_DIR`.
 
 The package name is `@juyanjy/dsh-codex-bridge` — ours, published on npm. The
-unscoped `dsh-codex-bridge` there belongs to an unrelated project, so it is not
-ours to use. The two routes
-spell the loader entry differently, and each has to match the directory it
-creates, because a profile resolves that `name` as a module specifier:
+unscoped `dsh-codex-bridge` belongs to an unrelated project, so neither the
+symlink nor the loader entry uses it. Both install routes resolve the same scoped
+package name:
 
 | Route | Installed directory | Entry `name` |
 | --- | --- | --- |
 | bundle | `node_modules/@juyanjy/dsh-codex-bridge` | `@juyanjy/dsh-codex-bridge` (shipped in `cordis.patch.yml`) |
-| checkout | `node_modules/dsh-codex-bridge` → `vendor/dsh-codex-bridge` | `dsh-codex-bridge` (written into the profile) |
+| checkout | `node_modules/@juyanjy/dsh-codex-bridge` → `vendor/@juyanjy/dsh-codex-bridge` | `@juyanjy/dsh-codex-bridge` |
 
-Both keep the short id `dsh-codex-bridge`, which is what the config tree and
-`plugin_manager` address. Pick one route: with both installed, two entries load
-two copies of the plugin.
+The short Cordis entry id stays `dsh-codex-bridge`, which is what the config tree
+and `plugin_manager` address. The browser factory id is different: it must be the
+full package name, `@juyanjy/dsh-codex-bridge`, so the client loader recognizes
+the already-preloaded factory instead of executing the bundle again.
+
+If the package is already listed in `dsh.profile.bundles`, the installer keeps
+the shipped bundle route and does not append another profile row. Otherwise,
+`--write-config` appends one explicit row. Use one registration row, not both.
 
 Then restart DeepSeek Harness. **This is not optional**: `patchReload: live`
 re-reads config, not module code, so a running Harness keeps the module it already
@@ -266,13 +270,14 @@ missing, and `uninstall.mjs` tells you which block to remove.
 
 ## Configuration
 
-Every entry carries the same config; only `name` differs by install route (see
-the table above — the bundle route gets this from the shipped `cordis.patch.yml`).
+Every entry carries the same config and the same scoped package name. The bundle
+route gets it from the shipped `cordis.patch.yml`; `--write-config` can put the
+equivalent row in the profile instead.
 
 ```yaml
 - insert:
     - id: dsh-codex-bridge
-      name: dsh-codex-bridge   # '@juyanjy/dsh-codex-bridge' for a bundle install
+      name: '@juyanjy/dsh-codex-bridge'
       config:
         binary: ""            # explicit path to `codex`; empty = auto-detect
         requestTimeoutMs: 30000
@@ -291,7 +296,7 @@ Binary resolution order:
 ## Development
 
 ```bash
-npm test            # 216 unit tests, no Codex install required
+npm test            # 218 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 
