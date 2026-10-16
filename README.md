@@ -213,10 +213,20 @@ Write the explicit `git+https://` URL — the `github:user/repo` shorthand goes 
 SSH and fails on a machine without a GitHub SSH key. The GitHub route was verified
 with a copy of a real profile: pnpm fetches
 `codeload.github.com/JUYANJY/dsh-codex-bridge`, installs
-`node_modules/@juyanjy/dsh-codex-bridge`, and the whole tree arrives —
-`cordis.patch.yml`, `docs/`, and every `src/*.js`. The npm route was verified by
-installing the published tarball into a clean directory: `added 1 package`,
-26 files, sha1 `608464f2…` — the same tarball the registry reports for `0.1.0`.
+`node_modules/@juyanjy/dsh-codex-bridge`, and the whole checkout arrives —
+`cordis.patch.yml`, every `src/*.js`, and this repo's `tests/`, `scripts/` and
+agent docs.
+
+The npm route installs the **published tarball**, which is a subset of the
+checkout: `src/`, `cordis.patch.yml`, `README.md`, `LICENSE`, and the two
+user-facing docs (`docs/limitations.md`, `docs/protocol.md`). It carries no
+`tests/`, no `scripts/`, and none of `docs/agents/` or `docs/research/`. This file
+deliberately freezes no file count and no shasum — both change with every release,
+so ask the registry for the version you are about to install:
+
+```bash
+npm view @juyanjy/dsh-codex-bridge version dist.fileCount dist.unpackedSize dist.shasum
+```
 
 ### From a checkout (the development route)
 
@@ -295,8 +305,11 @@ Binary resolution order:
 
 ## Development
 
+Both commands need a **checkout**: neither `tests/` nor `scripts/` is in the npm
+tarball (see [Install](#install)).
+
 ```bash
-npm test            # 218 unit tests, no Codex install required
+npm test            # 228 unit tests, no Codex install required
 node scripts/smoke.mjs   # live handshake against the real app-server
 ```
 

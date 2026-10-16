@@ -65,3 +65,19 @@ test("the patch is in the published file list, and the scope is public", () => {
   assert.equal(manifest.publishConfig.access, "public");
   assert.match(manifest.name, /^@[^/]+\//, "a scoped name needs an explicit public access");
 });
+
+test("the published file list keeps this repo's own material out of the tarball", () => {
+  // `files: ["docs"]` shipped the agent docs and the internal review dossier
+  // (45 KB) to every user, so the user-facing surface is named file by file.
+  assert.equal(
+    manifest.files.includes("docs"),
+    false,
+    "listing `docs` wholesale ships docs/agents and docs/research",
+  );
+  assert.ok(manifest.files.includes("docs/limitations.md"));
+  assert.ok(manifest.files.includes("docs/protocol.md"));
+  assert.equal(
+    manifest.files.some((entry) => entry.includes("research") || entry.includes("agents")),
+    false,
+  );
+});
