@@ -177,7 +177,7 @@ function bootClient(replies, hooks = {}) {
           },
         },
       }
-      : undefined),
+      : hooks.services?.[name]),
     effect: () => () => {},
   };
 
@@ -190,7 +190,19 @@ function bootClient(replies, hooks = {}) {
     reads,
     calls,
     render: () => { hook = 0; return page.component({}); },
+    /**
+     * Render one seat by name, with the hook cursor reset exactly as `render` does.
+     * @param seatName - the slot seat the component was registered under.
+     * @returns the element tree.
+     */
+    renderSeat: (seatName) => {
+      const seat = registrations.find((entry) => entry.options.name === seatName);
+      assert.ok(seat, `the ${seatName} seat was never registered`);
+      hook = 0;
+      return seat.component({});
+    },
     runEffects: () => { const pending = effects.splice(0); for (const effect of pending) effect(); },
+    applyAgain: () => mod.apply(ctx),
   };
 }
 
@@ -233,17 +245,29 @@ function badgesByKind(tree) {
   return found;
 }
 
-test("both seats are registered under the plugin id", () => {
+test("all three seats are registered under the plugin id", () => {
   const client = bootClient([]);
   const sidebar = client.registrations.find((entry) => entry.options.name === "sidebar.panellist");
   const page = client.registrations.find((entry) => entry.options.name === "main");
+  const dock = client.registrations.find((entry) => entry.options.name === "conversation.input.dock");
   assert.equal(sidebar.options.id, "dsh-codex-bridge");
   assert.equal(sidebar.options.label, "Codex");
   assert.equal(sidebar.options.order, 55);
   assert.equal(page.options.key, "dsh-codex-bridge");
+  assert.equal(dock.options.id, "dsh-codex-bridge");
+  assert.equal(dock.options.label, "Codex board summary");
+  assert.equal(dock.options.order, 30, "order 30 sits above the skills deck's 40 and below the host's own 0/10/20 rows");
   assert.equal(sidebar.component.name, "CodexBoardIcon");
   assert.equal(page.component.name, "CodexBoardPage");
-  assert.equal(client.registrations.length, 2);
+  assert.equal(dock.component.name, "CodexDockStrip");
+  assert.equal(client.registrations.length, 3);
+});
+
+test("a second apply does not register the seats twice", () => {
+  const client = bootClient([]);
+  assert.equal(client.registrations.length, 3);
+  client.applyAgain();
+  assert.equal(client.registrations.length, 3, "duplicate rows under one id are what the client loader rejects");
 });
 
 test("the first paint says it is reading, then the snapshot paints the columns", async () => {
@@ -615,4 +639,108 @@ test("an old quota failure keeps its line but does not invite a takeover", async
   // The invitation does not.
   const labels = withClass(tree, "dcb_btn").map((button) => textOf(button));
   assert.ok(!labels.includes("Prepare a takeover"), labels.join(" | "));
+});
+
+// ---------------------------------------------------------------------------
+// The input-dock strip: one line, the page's own numbers, no write path.
+
+test("the strip says it is reading before any snapshot arrives", () => {
+  const client = bootClient([]);
+  const tree = client.renderSeat("conversation.input.dock");
+  const strip = byClass(tree, "dcb_dock")[0];
+  assert.ok(strip, "the strip is registered as one element");
+  assert.equal(strip.props["data-kind"], "reading");
+  assert.equal(textOf(byClass(tree, "dcb_dockText")[0]), "reading the app-server…");
+  assert.equal(client.reads.length, 0, "nothing was read before the effect ran");
+});
+
+test("the strip quotes the page's own totals and the quota line", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.renderSeat("conversation.input.dock");
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.renderSeat("conversation.input.dock");
+
+  assert.equal(byClass(tree, "dcb_dock")[0].props["data-kind"], "live");
+  assert.equal(
+    textOf(byClass(tree, "dcb_dockText")[0]),
+    "3 threads · 0 running · 1 blocked · 1 needs you · 1 nothing observed · " + fixture().quota.line
+  );
+  assert.equal(client.reads.length, 1);
+});
+
+test("a snapshot without totals is named as one, never counted", async () => {
+  const client = bootClient([{ ok: true, value: fixture({ totals: undefined }) }]);
+  client.renderSeat("conversation.input.dock");
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.renderSeat("conversation.input.dock");
+
+  assert.equal(byClass(tree, "dcb_dock")[0].props["data-kind"], "error");
+  assert.match(textOf(byClass(tree, "dcb_dockText")[0]), /carries no totals/);
+});
+
+test("a failed read hides the counts instead of ageing them", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }, new Error("the host route is gone")]);
+  client.renderSeat("conversation.input.dock");
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(byClass(client.renderSeat("conversation.input.dock"), "dcb_dock")[0].props["data-kind"], "live");
+
+  // Let the poll window lapse, then let the strip's next mount read again.
+  const realNow = Date.now;
+  Date.now = () => realNow() + 10_000;
+  try {
+    client.renderSeat("conversation.input.dock");
+    client.runEffects();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  } finally {
+    Date.now = realNow;
+  }
+
+  const tree = client.renderSeat("conversation.input.dock");
+  assert.equal(byClass(tree, "dcb_dock")[0].props["data-kind"], "stale");
+  const text = textOf(byClass(tree, "dcb_dockText")[0]);
+  assert.match(text, /^disconnected \(the host route is gone\) · last read \d\d:\d\d:\d\dZ · counts hidden, not live$/);
+  assert.ok(!/\d+ threads/.test(text), "no count survives a failed read");
+});
+
+test("a second seat on the store joins the read in flight instead of starting one", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.renderSeat("conversation.input.dock");
+  client.renderSeat("conversation.input.dock");
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(client.reads.length, 1, "two seats on one store still cost one request");
+  assert.match(textOf(byClass(client.renderSeat("conversation.input.dock"), "dcb_dockText")[0]), /^3 threads/);
+});
+
+test("the strip offers no way to write to Codex", async () => {
+  const client = bootClient([{ ok: true, value: fixture() }]);
+  client.renderSeat("conversation.input.dock");
+  client.runEffects();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  const tree = client.renderSeat("conversation.input.dock");
+
+  const buttons = elements(tree).filter((el) => el.type === "button");
+  assert.equal(buttons.length, 1, "the strip is a single button");
+  const text = buttons.map(textOf).join(" ");
+  for (const verb of ["Keep Codex moving", "Stop keeping it moving", "Evaluate one pass", "Prepare a takeover", "Mark taken over", "Pause this thread", "Resume this thread"]) {
+    assert.ok(!text.includes(verb), `${verb} is a write and belongs to the page alone`);
+  }
+  assert.deepEqual(client.calls.map((call) => call.method), ["snapshot"], "the strip only ever read");
+});
+
+test("clicking the strip asks the shell to open the board page", () => {
+  const selected = [];
+  const client = bootClient([], { services: { layout: { selectPanel: (id) => selected.push(id) } } });
+  const strip = byClass(client.renderSeat("conversation.input.dock"), "dcb_dock")[0];
+  strip.props.onClick();
+  assert.deepEqual(selected, ["dsh-codex-bridge"]);
+});
+
+test("a strip whose shell has no layout service says so instead of throwing", () => {
+  const client = bootClient([]);
+  const strip = byClass(client.renderSeat("conversation.input.dock"), "dcb_dock")[0];
+  assert.doesNotThrow(() => strip.props.onClick());
 });

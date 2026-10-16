@@ -11,10 +11,15 @@
  *  - one row in the shell's own global panel list (`sidebar.panellist`) and one
  *    page in the layout's keyed `main` slot, both under the same panel id, so the
  *    shell keeps owning the row box, the label, the highlight and the switch;
- *  - a 5s poll of the host's `snapshot` endpoint;
- *  - three controls, and no more: arm/disarm the autopilot, pause one thread, and
- *    fetch a takeover brief. The only write any of them can reach is
- *    `thread/queue/add`, and only the autopilot arm reaches it.
+ *  - one full-width strip in the shell's `conversation.input.dock` slot, the row
+ *    above the composer card: a read-only line of the same counts, and a click
+ *    that opens the page through `ctx.layout.selectPanel`;
+ *  - one 5s poll of the host's `snapshot` endpoint, shared by both seats, so the
+ *    strip and the page cannot disagree about how many threads are blocked;
+ *  - three controls on the page, and no more: arm/disarm the autopilot, pause one
+ *    thread, and fetch a takeover brief. The only write any of them can reach is
+ *    `thread/queue/add`, and only the autopilot arm reaches it. The strip writes
+ *    nothing, so it never needs an "is it safe to click" question answered.
  *
  * Every judgement shown here was made by the host (`task-state.js`) and every
  * line says whether Codex reported it or this connection inferred it. The panel
@@ -39,8 +44,15 @@ window.__ModuleLoader__.load({
     const RPC_CARRIER = "/api";
     const RPC_CHANNEL = "codexboard";
 
-    /** How often the panel re-reads the snapshot. One snapshot is a handful of local reads. */
+    /** How often the seats re-read the snapshot. One snapshot is a handful of local reads. */
     const POLL_INTERVAL_MS = 5000;
+
+    /**
+     * Where the strip sits in `conversation.input.dock`. The shipped occupants
+     * take 0/10/20/20, the skills deck takes 40 and the git graph 100, so 30
+     * lands directly above the deck's pill row without touching anyone's slot.
+     */
+    const DOCK_ORDER = 30;
 
     /**
      * How long one click arms the autopilot for. It disarms itself at the
@@ -55,6 +67,14 @@ window.__ModuleLoader__.load({
 
     /** The client context, captured in `apply`. */
     let __CTX__ = null;
+
+    /**
+     * Whether this module has already registered its seats. A second `apply`
+     * (an HMR re-execution, a double mount) must not register them again: two
+     * rows carrying one id is the duplicate registration the client loader
+     * rejects. The disposer clears it, so a genuine remount still works.
+     */
+    let panelApplied = false;
 
     const CSS = `
 .dcb_root{height:100%;min-height:0;display:flex;flex-direction:column;gap:10px;padding:14px 16px 16px;box-sizing:border-box;
@@ -144,6 +164,16 @@ window.__ModuleLoader__.load({
 .dcb_briefHead{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .dcb_briefBody{flex:1;min-height:0;overflow:auto;margin:0;padding:9px 10px;border-radius:8px;background:var(--dsw-specific-input-major);
   font-family:var(--ds-font-family-code);font-size:11px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}
+.dcb_dock{display:flex;align-items:center;gap:8px;width:100%;box-sizing:border-box;appearance:none;font:inherit;text-align:left;
+  padding:5px 10px;border-radius:9px;cursor:pointer;font-size:11.5px;line-height:1.4;
+  background:var(--dsw-specific-input-major);color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l1)}
+.dcb_dock:hover{background:var(--dsw-alias-interactive-bg-hover);color:var(--dsw-alias-label-primary)}
+.dcb_dock:focus-visible{outline:2px solid var(--dsw-alias-state-business-primary,#1c7ed6);outline-offset:1px}
+.dcb_dock[data-kind=stale]{color:var(--dsw-alias-state-warn-primary,#e8590c);border-color:var(--dsw-alias-state-warn-primary,#e8590c)}
+.dcb_dock[data-kind=error]{color:var(--dsw-alias-state-error-primary,#c92a2a);border-color:var(--dsw-alias-state-error-primary,#c92a2a)}
+.dcb_dockName{font-weight:650;color:var(--dsw-alias-label-primary);white-space:nowrap}
+.dcb_dockText{flex:1;min-width:0;overflow-wrap:anywhere}
+.dcb_dockOpen{font-size:10.5px;color:var(--dsw-alias-label-tertiary);white-space:nowrap}
 `;
 
     /**
@@ -159,6 +189,105 @@ window.__ModuleLoader__.load({
       const response = await connection.rpc.call(RPC_CARRIER, RPC_CHANNEL, { method, payload: payload || {} });
       if (response && response.ok) return response.value;
       throw new Error((response && response.error && response.error.message) || (method + " failed"));
+    }
+
+    /**
+     * The snapshot both seats show.
+     *
+     * One read feeds the strip and the page, so the two render the same object
+     * rather than two readings of it: a strip that said three blocked threads
+     * while the page said four would discredit both. A failed read records the
+     * failure and keeps the last snapshot for the page, which labels it as the
+     * previous one; the strip hides the counts instead, because a stale count is
+     * exactly what must not look like a live one.
+     */
+    const boardStore = { board: null, error: null, readAt: null, busy: false };
+
+    /** The mounted seats; each is told when the store changes. */
+    const boardSeats = new Set();
+
+    /** How many seats want the timer. The last one out stops it. */
+    let boardPollers = 0;
+    let boardTimer = null;
+
+    /** The read in flight, shared by every seat that asks while it runs. */
+    let boardInFlight = null;
+
+    /**
+     * @returns a flat view of the store, safe to hand to a seat's own state.
+     */
+    function boardView() {
+      return { board: boardStore.board, error: boardStore.error, busy: boardStore.busy };
+    }
+
+    /** Tell every mounted seat the store changed. One broken seat stops nobody. */
+    function boardChanged() {
+      for (const seat of [...boardSeats]) {
+        try { seat(); } catch { /* a seat that throws on a notify must not break the others */ }
+      }
+    }
+
+    /**
+     * Subscribe a seat to the shared snapshot.
+     * @param seat - called whenever the store changes.
+     * @returns the unsubscribe.
+     */
+    function subscribeBoard(seat) {
+      boardSeats.add(seat);
+      return () => { boardSeats.delete(seat); };
+    }
+
+    /**
+     * Read one snapshot into the store. Callers that arrive while a read is in
+     * flight join it, so two seats on one interval cost one request, not two.
+     * @returns the snapshot.
+     */
+    function readBoard() {
+      if (boardInFlight) return boardInFlight;
+      boardStore.busy = true;
+      boardChanged();
+      boardInFlight = callEndpoint("snapshot", {}).then((next) => {
+        boardStore.board = next;
+        boardStore.error = null;
+        boardStore.readAt = Date.now();
+        return next;
+      }, (failure) => {
+        boardStore.error = String((failure && failure.message) || failure);
+        throw failure;
+      }).finally(() => {
+        boardInFlight = null;
+        boardStore.busy = false;
+        boardChanged();
+      });
+      return boardInFlight;
+    }
+
+    /**
+     * Start the one timer every seat shares.
+     * @returns the disposer for this seat.
+     */
+    function startPolling() {
+      boardPollers += 1;
+      if (boardPollers === 1 && boardTimer === null) {
+        boardTimer = setInterval(() => {
+          readBoard().catch(() => { /* the seats render the failure themselves */ });
+        }, POLL_INTERVAL_MS);
+      }
+      return () => {
+        boardPollers = Math.max(0, boardPollers - 1);
+        if (boardPollers === 0 && boardTimer !== null) {
+          clearInterval(boardTimer);
+          boardTimer = null;
+        }
+      };
+    }
+
+    /**
+     * @returns whether the store already holds a snapshot from this poll window,
+     *          so a seat that mounts late can join it instead of re-reading.
+     */
+    function boardIsFresh() {
+      return boardStore.board !== null && boardStore.readAt !== null && (Date.now() - boardStore.readAt) < POLL_INTERVAL_MS;
     }
 
     /**
@@ -405,19 +534,14 @@ window.__ModuleLoader__.load({
       const [copied, setCopied] = React.useState(false);
       const alive = React.useRef(true);
 
+      /**
+       * Read through the shared store, so the page and the input-dock strip show
+       * one snapshot from one read instead of two timers reading the same route.
+       */
       const load = React.useCallback(async () => {
-        setBusy(true);
         try {
-          const next = await callEndpoint("snapshot", {});
-          if (!alive.current) return;
-          setBoard(next);
-          setError(null);
-        } catch (failure) {
-          if (!alive.current) return;
-          setError(String((failure && failure.message) || failure));
-        } finally {
-          if (alive.current) setBusy(false);
-        }
+          await readBoard();
+        } catch { /* the store carries the failure; the subscription renders it */ }
       }, []);
 
       /** Run one endpoint and fold any failure into the banner, never into a guess. */
@@ -435,9 +559,20 @@ window.__ModuleLoader__.load({
 
       React.useEffect(() => {
         alive.current = true;
-        load();
-        const timer = setInterval(load, POLL_INTERVAL_MS);
-        return () => { alive.current = false; clearInterval(timer); };
+        const sync = () => {
+          if (!alive.current) return;
+          const view = boardView();
+          setBoard(view.board);
+          setError(view.error);
+          setBusy(view.busy);
+        };
+        const unsubscribe = subscribeBoard(sync);
+        // A strip already mounted may have read just now; join that snapshot
+        // instead of asking the host route for the same numbers a second time.
+        if (!boardIsFresh()) load();
+        const stopPolling = startPolling();
+        sync();
+        return () => { alive.current = false; unsubscribe(); stopPolling(); };
       }, [load]);
 
       const autopilot = board && board.autopilot ? board.autopilot : null;
@@ -570,6 +705,132 @@ window.__ModuleLoader__.load({
     }
 
     /**
+     * What the strip should say, in the strip's own words.
+     *
+     * Four honest states and no fifth: a live snapshot, a snapshot whose newest
+     * read failed, a failure with nothing behind it, and nothing read yet. The
+     * stale state drops the counts rather than ageing them.
+     *
+     * @param seen - the store view the strip last painted.
+     * @returns `{ kind, text, title, label }`.
+     */
+    function dockState(seen) {
+      const board = seen && seen.board ? seen.board : null;
+      const failure = seen && seen.error ? seen.error : null;
+      const read = board && typeof board.generatedAt === "string" ? board.generatedAt.slice(11, 19) + "Z" : "unknown";
+      if (board && failure) {
+        return {
+          kind: "stale",
+          text: "disconnected (" + failure + ") · last read " + read + " · counts hidden, not live",
+          title: "The Codex board last answered at " + read + "; the counts stay hidden until it answers again.",
+          label: "Codex board: disconnected, last read " + read,
+        };
+      }
+      const totals = board && board.totals;
+      if (totals && typeof totals.running === "number") {
+        const quota = quotaLine(board.quota) || "quota: unknown";
+        const text = String(totals.threads) + " threads · " + totals.running + " running · " + totals.blocked
+          + " blocked · " + totals.needsHuman + " needs you · " + totals.noActivity + " nothing observed · " + quota;
+        return {
+          kind: "live",
+          text,
+          title: "Snapshot read at " + read + " · open the Codex board",
+          label: "Codex board: " + text,
+        };
+      }
+      if (board) {
+        return {
+          kind: "error",
+          text: "the snapshot carries no totals (a host half older than this panel?)",
+          title: "Open the Codex board",
+          label: "Codex board: the snapshot carries no totals",
+        };
+      }
+      if (failure) {
+        return {
+          kind: "error",
+          text: "no snapshot (" + failure + ")",
+          title: "Open the Codex board",
+          label: "Codex board: no snapshot",
+        };
+      }
+      return { kind: "reading", text: "reading the app-server…", title: "Open the Codex board", label: "Codex board: reading" };
+    }
+
+    /**
+     * The input-dock strip: one line of the same numbers the page shows.
+     *
+     * It reads and it navigates; it never writes, so there is nothing here a
+     * mis-click can send to Codex. A click hands the selection to
+     * `ctx.layout.selectPanel`, which is the shell's own switch, so the shell
+     * keeps owning how a panel is opened instead of the plugin reaching into the
+     * layout. The whole strip is one `<button>`, which is also what makes it
+     * keyboard-reachable without a key handler of our own.
+     *
+     * @returns the strip element.
+     */
+    function CodexDockStrip() {
+      const [seen, setSeen] = React.useState(boardView());
+      const alive = React.useRef(true);
+
+      React.useEffect(() => {
+        alive.current = true;
+        const sync = () => { if (alive.current) setSeen(boardView()); };
+        const unsubscribe = subscribeBoard(sync);
+        // The page may already be polling. If it read just now, mount joins that
+        // snapshot instead of issuing a second request for the same facts.
+        if (!boardIsFresh()) readBoard().catch(() => { /* the strip renders the failure */ });
+        const stopPolling = startPolling();
+        sync();
+        return () => {
+          alive.current = false;
+          unsubscribe();
+          stopPolling();
+        };
+      }, []);
+
+      const open = () => {
+        const ctx = __CTX__;
+        // `ctx.layout` is the declared surface; `ctx.get` is the fallback for a
+        // shell that only exposes the service through the accessor. Either read
+        // may refuse for a service this plugin never declared, so both are guarded.
+        let layout;
+        try {
+          layout = ctx && ctx.layout;
+        } catch { /* not this plugin's to see */ }
+        if (!layout && ctx && typeof ctx.get === "function") {
+          try {
+            layout = ctx.get("layout");
+          } catch { /* not registered */ }
+        }
+        if (!layout || typeof layout.selectPanel !== "function") {
+          console.warn("[dsh-codex-bridge] the layout service is unavailable; the strip cannot open the board page");
+          return;
+        }
+        try {
+          layout.selectPanel(PANEL_ID);
+        } catch (failure) {
+          console.warn("[dsh-codex-bridge] opening the board page failed:", failure);
+        }
+      };
+
+      const state = dockState(seen);
+      return h("button", {
+        type: "button",
+        className: "dcb_dock",
+        "data-kind": state.kind,
+        "data-dsh-codex-bridge-dock": PANEL_ID,
+        onClick: open,
+        title: state.title,
+        "aria-label": state.label,
+      },
+        h("span", { className: "dcb_dockName" }, "Codex"),
+        h("span", { className: "dcb_dockText" }, state.text),
+        h("span", { className: "dcb_dockOpen" }, "open board")
+      );
+    }
+
+    /**
      * The sidebar row glyph. The shell owns the row box, label and highlight.
      * @param props - `{ size, active }`.
      * @returns the glyph element.
@@ -593,6 +854,11 @@ window.__ModuleLoader__.load({
      * @param ctx - the client plugin context.
      */
     function apply(ctx) {
+      // A second apply on this module (an HMR re-execution, a double mount) must
+      // not register the seats twice: two rows with one id is the crash the client
+      // loader rejects. The disposer below clears the flag, so a real remount works.
+      if (panelApplied) return;
+      panelApplied = true;
       __CTX__ = ctx;
       const slots = ctx.slots;
       if (!slots || typeof slots.inject !== "function" || typeof slots.register !== "function") return;
@@ -607,8 +873,9 @@ window.__ModuleLoader__.load({
 
       const disposers = [];
       try {
-        // Both seats belong to shell plugins; `slots.inject` waits for the seat to
-        // be declared, so load order between us and the shell does not matter.
+        // All three seats belong to shell plugins; `slots.inject` waits for the
+        // seat to be declared, so load order between us and the shell does not
+        // matter.
         disposers.push(slots.inject("sidebar.panellist", () => slots.register({
           name: "sidebar.panellist",
           id: PANEL_ID,
@@ -619,6 +886,15 @@ window.__ModuleLoader__.load({
           name: "main",
           key: PANEL_ID,
         }, CodexBoardPage)));
+        // The strip sits above the composer card. Order 30 keeps it below the
+        // host's own dock rows (todo 0, goal 10, at-file 20, queue 20) and above
+        // the skills deck's pill row at 40, which is the slot the user pointed at.
+        disposers.push(slots.inject("conversation.input.dock", () => slots.register({
+          name: "conversation.input.dock",
+          id: PANEL_ID,
+          order: 30,
+          label: "Codex board summary",
+        }, CodexDockStrip)));
       } catch (failure) {
         console.warn("[dsh-codex-bridge] panel registration failed:", failure);
       }
@@ -627,6 +903,7 @@ window.__ModuleLoader__.load({
         for (const dispose of disposers.splice(0)) {
           try { dispose(); } catch { /* already released */ }
         }
+        panelApplied = false;
       }, "dsh-codex-bridge: panel");
     }
 
